@@ -12,7 +12,11 @@ export class LocalGitCredentialProvider implements GitCredentialProvider {
 		{ token: string; expiresAt: number }
 	>();
 	private inflightByHost = new Map<string, Promise<string | null>>();
-	private cachedAskpass: { token: string; path: string } | null = null;
+	private cachedAskpass: {
+		token: string;
+		path: string;
+		cleanupPaths: string[];
+	} | null = null;
 
 	constructor(
 		envResolver: () => Promise<Record<string, string>> = async () =>
@@ -73,11 +77,13 @@ export class LocalGitCredentialProvider implements GitCredentialProvider {
 	private async askpassFor(token: string): Promise<string> {
 		if (this.cachedAskpass?.token === token) return this.cachedAskpass.path;
 		if (this.cachedAskpass) {
-			unlink(this.cachedAskpass.path).catch(() => {});
+			for (const filePath of this.cachedAskpass.cleanupPaths) {
+				unlink(filePath).catch(() => {});
+			}
 		}
-		const path = await writeTempAskpass(token);
-		this.cachedAskpass = { token, path };
-		return path;
+		const { askpassPath, cleanupPaths } = await writeTempAskpass(token);
+		this.cachedAskpass = { token, path: askpassPath, cleanupPaths };
+		return askpassPath;
 	}
 
 	private async fetchTokenViaGitCredential(

@@ -12,6 +12,7 @@ import { LuCopy } from "react-icons/lu";
 import jetbrainsIcon from "renderer/assets/app-icons/jetbrains.svg";
 import terminalIcon from "renderer/assets/app-icons/terminal.png";
 import vscodeIcon from "renderer/assets/app-icons/vscode.svg";
+import { filterExternalAppsForPlatform } from "renderer/lib/external-app-platforms";
 import {
 	FINDER_OPTIONS,
 	IDE_OPTIONS,
@@ -72,6 +73,11 @@ export function OpenInExternalDropdownItems({
 	copyPathIconClassName,
 	copyPathLabelClassName,
 }: OpenInExternalDropdownItemsProps) {
+	const ideOptions = filterExternalAppsForPlatform(IDE_OPTIONS);
+	const terminalOptions = filterExternalAppsForPlatform(TERMINAL_OPTIONS);
+	const vscodeOptions = filterExternalAppsForPlatform(VSCODE_OPTIONS);
+	const jetbrainsOptions = filterExternalAppsForPlatform(JETBRAINS_OPTIONS);
+
 	const renderAppOptions = (
 		apps: OpenInExternalAppOption[],
 		group: OpenInExternalAppGroup,
@@ -95,12 +101,12 @@ export function OpenInExternalDropdownItems({
 		));
 
 	const activeIdeOption = activeApp
-		? [...IDE_OPTIONS, ...VSCODE_OPTIONS, ...JETBRAINS_OPTIONS].find(
+		? [...ideOptions, ...vscodeOptions, ...jetbrainsOptions].find(
 				(app) => app.id === activeApp,
 			)
 		: undefined;
 	const activeTerminalOption = activeApp
-		? TERMINAL_OPTIONS.find((app) => app.id === activeApp)
+		? terminalOptions.find((app) => app.id === activeApp)
 		: undefined;
 
 	return (
@@ -129,7 +135,7 @@ export function OpenInExternalDropdownItems({
 					</div>
 				</DropdownMenuSubTrigger>
 				<DropdownMenuSubContent sideOffset={8} className={subContentClassName}>
-					{renderAppOptions(IDE_OPTIONS, "ide")}
+					{renderAppOptions(ideOptions, "ide")}
 					<DropdownMenuSub>
 						<DropdownMenuSubTrigger className={subTriggerClassName}>
 							<div
@@ -150,7 +156,7 @@ export function OpenInExternalDropdownItems({
 							</div>
 						</DropdownMenuSubTrigger>
 						<DropdownMenuSubContent className={subContentClassName}>
-							{renderAppOptions(VSCODE_OPTIONS, "vscode")}
+							{renderAppOptions(vscodeOptions, "vscode")}
 						</DropdownMenuSubContent>
 					</DropdownMenuSub>
 					<DropdownMenuSub>
@@ -173,7 +179,7 @@ export function OpenInExternalDropdownItems({
 							</div>
 						</DropdownMenuSubTrigger>
 						<DropdownMenuSubContent className={subContentClassName}>
-							{renderAppOptions(JETBRAINS_OPTIONS, "jetbrains")}
+							{renderAppOptions(jetbrainsOptions, "jetbrains")}
 						</DropdownMenuSubContent>
 					</DropdownMenuSub>
 				</DropdownMenuSubContent>
@@ -201,7 +207,7 @@ export function OpenInExternalDropdownItems({
 					</div>
 				</DropdownMenuSubTrigger>
 				<DropdownMenuSubContent sideOffset={8} className={subContentClassName}>
-					{renderAppOptions(TERMINAL_OPTIONS, "terminal")}
+					{renderAppOptions(terminalOptions, "terminal")}
 				</DropdownMenuSubContent>
 			</DropdownMenuSub>
 			<DropdownMenuSeparator />

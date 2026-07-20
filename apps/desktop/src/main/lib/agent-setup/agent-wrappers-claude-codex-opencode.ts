@@ -280,7 +280,7 @@ export function createClaudeWrapper(): void {
 	const script = buildWrapperScript("claude", `exec "$REAL_BIN" "$@"`, {
 		agentId: "claude",
 	});
-	createWrapper("claude", script);
+	createWrapper("claude", script, { agentId: "claude" });
 }
 
 /**
@@ -293,7 +293,7 @@ export function createCodexWrapper(): void {
 		buildCodexWrapperExecLine(notifyPath),
 		{ agentId: "codex" },
 	);
-	createWrapper("codex", script);
+	createWrapper("codex", script, { agentId: "codex" });
 }
 
 /**
@@ -503,5 +503,5 @@ export function createOpenCodeWrapper(): void {
 		`export OPENCODE_CONFIG_DIR="${OPENCODE_CONFIG_DIR}"\nexec "$REAL_BIN" "$@"`,
 		{ agentId: "opencode" },
 	);
-	createWrapper("opencode", script);
+	createWrapper("opencode", script, { agentId: "opencode" });
 }

@@ -104,7 +104,7 @@ export function createDroidWrapper(): void {
 	const script = buildWrapperScript("droid", `exec "$REAL_BIN" "$@"`, {
 		agentId: "droid",
 	});
-	createWrapper("droid", script);
+	createWrapper("droid", script, { agentId: "droid" });
 }
 
 /**

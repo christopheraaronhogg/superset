@@ -49,8 +49,27 @@ interface WriteCommandsInPaneOptions {
 
 export function buildTerminalCommand(
 	commands: string[] | null | undefined,
+	options?: { shell?: string | null; platform?: string },
 ): string | null {
 	if (!Array.isArray(commands) || commands.length === 0) return null;
+	// Lazy import avoidance: keep this renderer-safe. PowerShell chaining is
+	// only applied when the caller knows the interactive shell is PowerShell.
+	const platform =
+		options?.platform ??
+		(typeof process !== "undefined" ? process.platform : undefined);
+	const shell = (options?.shell ?? "").toLowerCase();
+	const isPowerShell =
+		platform === "win32" &&
+		(shell.includes("powershell") ||
+			shell.endsWith("pwsh") ||
+			shell.includes("\\pwsh"));
+	if (isPowerShell) {
+		return commands
+			.map((command, index) =>
+				index === 0 ? command : `if ($?) { ${command} }`,
+			)
+			.join("; ");
+	}
 	return commands.join(" && ");
 }
 

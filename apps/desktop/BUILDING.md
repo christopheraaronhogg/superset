@@ -37,3 +37,27 @@ ls -la release/*-linux.yml
 ```
 
 If both files exist, packaging produced the Linux artifact + updater metadata that `electron-updater` expects.
+
+# Windows (NSIS) local / CI build
+
+This fork supports an unofficial Windows 10/11 x64 build. See
+[`docs/windows-desktop.md`](../../docs/windows-desktop.md) for install notes,
+unsigned-installer / SmartScreen limitations, and release tagging (`windows-v*`).
+
+From `apps/desktop` on a Windows machine (or GitHub `windows-latest`):
+
+```powershell
+bun run install:deps
+bun run prebuild
+$env:CSC_IDENTITY_AUTO_DISCOVERY = "false"
+$env:TARGET_PLATFORM = "win32"
+$env:TARGET_ARCH = "x64"
+$env:GITHUB_REPOSITORY = "christopheraaronhogg/superset"
+bun run scripts/run-electron-builder.ts --publish never --win --x64
+```
+
+Expected outputs in `apps/desktop/release/`:
+
+- `Superset-<version>-x64.exe` (NSIS)
+- `latest.yml` (Windows auto-update manifest)
+- optional `*.blockmap`

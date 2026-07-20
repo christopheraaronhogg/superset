@@ -33,11 +33,12 @@ const config: Configuration = {
 	// This enables proper channel-based auto-updates following electron-builder conventions
 	generateUpdatesFilesForAllChannels: true,
 
-	// Generate latest-mac.yml for auto-update (workflow handles actual upload)
+	// Generate latest-mac.yml for auto-update (workflow handles actual upload).
+	// Fork builds must publish/update against the fork repo, not upstream.
 	publish: {
 		provider: "github",
-		owner: "superset-sh",
-		repo: "superset",
+		owner: resolveGithubOwner(),
+		repo: resolveGithubRepo(),
 	},
 
 	// Directories
@@ -164,8 +165,23 @@ const config: Configuration = {
 	// NSIS installer (Windows)
 	nsis: {
 		oneClick: false,
+		perMachine: false,
 		allowToChangeInstallationDirectory: true,
+		include: join(pkg.resources, "build/installer/installer.nsh"),
 	},
 };
+
+function resolveGithubOwner(): string {
+	const fromEnv = process.env.GITHUB_REPOSITORY?.split("/")[0];
+	if (fromEnv) return fromEnv;
+	// Local/upstream default.
+	return "superset-sh";
+}
+
+function resolveGithubRepo(): string {
+	const fromEnv = process.env.GITHUB_REPOSITORY?.split("/")[1];
+	if (fromEnv) return fromEnv;
+	return "superset";
+}
 
 export default config;

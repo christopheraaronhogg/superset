@@ -1,0 +1,273 @@
+name: Build Desktop Windows
+
+on:
+  workflow_call:
+    inputs:
+      channel:
+        description: "Release channel (stable or canary)"
+        required: false
+        type: string
+        default: stable
+      version_suffix:
+        description: "Version suffix to append (e.g., -canary). Empty for stable."
+        required: false
+        type: string
+        default: ""
+      electron_builder_config:
+        description: "Electron builder config file"
+        required: false
+        type: string
+        default: electron-builder.ts
+      artifact_prefix:
+        description: "Prefix for artifact names"
+        required: false
+        type: string
+        default: desktop-windows
+      artifact_retention_days:
+        description: "Number of days to retain artifacts"
+        required: false
+        type: number
+        default: 30
+      run_smoke:
+        description: "Run silent-install + launch smoke after packaging"
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  build-windows:
+    name: Build - Windows (x64)
+    runs-on: windows-latest
+    # No private production environment required — uses public production URL defaults.
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Bun
+        id: setup-bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+
+      - name: Cache dependencies
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ steps.setup-bun.outputs.bun-revision }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-bun-${{ steps.setup-bun.outputs.bun-revision }}-
+
+      - name: Install dependencies
+        shell: bash
+        run: bun install --frozen --ignore-scripts
+
+      - name: Install desktop native dependencies
+        working-directory: apps/desktop
+        shell: bash
+        env:
+          # GitHub-hosted images include VS Build Tools; allow explicit bypass if image drifts.
+          SUPERSET_SKIP_WINDOWS_NATIVE_BUILD_PREREQ_CHECK: "0"
+        run: bun run install:deps
+
+      - name: Set version suffix
+        if: inputs.version_suffix != ''
+        working-directory: apps/desktop
+        shell: bash
+        run: |
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          NEW_VERSION="${CURRENT_VERSION}${{ inputs.version_suffix }}"
+          echo "Setting version to: $NEW_VERSION"
+          node -e "
+            const fs = require('fs');
+            const pkg = require('./package.json');
+            pkg.version = '$NEW_VERSION';
+            fs.writeFileSync('./package.json', JSON.stringify(pkg, null, '\t') + '\n');
+          "
+
+      - name: Clean dev folder
+        working-directory: apps/desktop
+        shell: bash
+        run: bun run clean:dev
+
+      - name: Generate file icons
+        working-directory: apps/desktop
+        shell: bash
+        run: bun run generate:icons
+
+      - name: Compile app with electron-vite
+        working-directory: apps/desktop
+        shell: bash
+        env:
+          # Public production defaults for fork CI (no private upstream secrets).
+          NEXT_PUBLIC_WEB_URL: https://app.superset.sh
+          NEXT_PUBLIC_API_URL: https://api.superset.sh
+          NEXT_PUBLIC_DOCS_URL: https://docs.superset.sh
+          NEXT_PUBLIC_STREAMS_URL: https://streams.superset.sh
+          NEXT_PUBLIC_ELECTRIC_URL: https://electric-proxy.avi-6ac.workers.dev
+          RELAY_URL: https://relay.superset.sh
+          STREAMS_URL: https://superset-stream.fly.dev
+          SUPERSET_WORKSPACE_NAME: superset
+          TARGET_PLATFORM: win32
+          TARGET_ARCH: x64
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: bun run compile:app
+
+      - name: Build Electron app (NSIS, unsigned)
+        working-directory: apps/desktop
+        shell: bash
+        env:
+          TARGET_PLATFORM: win32
+          TARGET_ARCH: x64
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          bun run scripts/run-electron-builder.ts \
+            --publish never \
+            --config ${{ inputs.electron_builder_config }} \
+            --win \
+            --x64
+
+      - name: Verify Windows installer + update manifest
+        working-directory: apps/desktop
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -la release || true
+          test -n "$(ls -1 release/*.exe 2>/dev/null)" || {
+            echo "::error::No NSIS .exe installer generated in apps/desktop/release"
+            exit 1
+          }
+          test -n "$(ls -1 release/latest.yml release/*.yml 2>/dev/null | head -1)" || {
+            echo "::error::No Windows auto-update manifest (latest.yml) generated"
+            exit 1
+          }
+          # Blockmap is optional depending on electron-builder version; report if present.
+          if ls release/*.blockmap >/dev/null 2>&1; then
+            echo "OK: blockmap present"
+          else
+            echo "NOTE: no .blockmap generated (electron-builder may omit it)"
+          fi
+
+      - name: Verify bundled CLI + native bindings
+        working-directory: apps/desktop
+        shell: bash
+        run: |
+          set -euo pipefail
+          UNPACKED=$(find release -maxdepth 2 -type d -name 'win-unpacked' | head -1)
+          test -n "$UNPACKED" || {
+            echo "::error::win-unpacked directory missing"
+            exit 1
+          }
+          CLI_BIN="$UNPACKED/resources/resources/bin/superset.exe"
+          if [ ! -f "$CLI_BIN" ]; then
+            CLI_BIN=$(find "$UNPACKED" -name 'superset.exe' | head -1 || true)
+          fi
+          test -n "${CLI_BIN:-}" && test -f "$CLI_BIN" || {
+            echo "::error::Bundled superset.exe missing from packaged output"
+            find "$UNPACKED/resources" -maxdepth 4 -type f -name 'superset*' || true
+            exit 1
+          }
+          "$CLI_BIN" --version
+
+          BINDING=$(find "$UNPACKED" -path '*@duckdb*/*duckdb.node' | head -1 || true)
+          if [ -z "$BINDING" ]; then
+            # DuckDB binding may live under app.asar.unpacked
+            BINDING=$(find "$UNPACKED" -name 'duckdb.node' | head -1 || true)
+          fi
+          test -n "${BINDING:-}" || {
+            echo "::error::DuckDB native binding missing from packaged Windows app"
+            exit 1
+          }
+          echo "OK: CLI=$CLI_BIN"
+          echo "OK: binding=$BINDING"
+
+      - name: Generate SHA256SUMS.txt
+        working-directory: apps/desktop/release
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > SHA256SUMS.txt
+          for f in *.exe latest.yml *.yml *.blockmap; do
+            [ -f "$f" ] || continue
+            # sha256sum on GitHub Windows runners via Git Bash
+            sha256sum "$f" >> SHA256SUMS.txt
+          done
+          # De-dupe yml if listed twice
+          sort -u SHA256SUMS.txt -o SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Focused Windows contract tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun test packages/shared/src/shell.test.ts
+          bun test packages/host-service/src/ports/tree-kill.test.ts
+          bun test packages/pty-daemon/src/process-tree.test.ts
+          bun test packages/host-service/src/providers/git/askpass.test.ts
+          bun test apps/desktop/src/main/lib/terminal-host/paths.test.ts
+          bun test apps/desktop/src/renderer/lib/file-manager-labels.test.ts
+          bun test apps/desktop/src/renderer/lib/external-app-platforms.test.ts
+          bun test apps/desktop/scripts/windows-native-build-prereqs.test.ts
+
+      - name: Silent install + launch smoke
+        if: inputs.run_smoke
+        shell: pwsh
+        working-directory: apps/desktop/release
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installer = Get-ChildItem -Filter "*.exe" | Where-Object { $_.Name -notlike "*uninstall*" } | Select-Object -First 1
+          if (-not $installer) { throw "No installer .exe found" }
+          $installDir = Join-Path $env:RUNNER_TEMP "superset-windows-smoke-install"
+          if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }
+          New-Item -ItemType Directory -Path $installDir | Out-Null
+
+          Write-Host "Installing $($installer.FullName) into $installDir"
+          # NSIS silent install into deterministic path (per-user)
+          $proc = Start-Process -FilePath $installer.FullName -ArgumentList "/S","/D=$installDir" -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "Installer exited $($proc.ExitCode)" }
+
+          $appExe = Get-ChildItem -Path $installDir -Recurse -Filter "Superset.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $appExe) {
+            $appExe = Get-ChildItem -Path $installDir -Recurse -Filter "*.exe" | Where-Object { $_.Name -match 'Superset' } | Select-Object -First 1
+          }
+          if (-not $appExe) { throw "Installed Superset.exe not found under $installDir" }
+
+          Write-Host "Launching $($appExe.FullName) for smoke window"
+          $app = Start-Process -FilePath $appExe.FullName -PassThru
+          Start-Sleep -Seconds 12
+          if ($app.HasExited -and $app.ExitCode -ne 0) {
+            throw "App exited early with code $($app.ExitCode)"
+          }
+          if (-not $app.HasExited) {
+            Write-Host "Stopping app process tree $($app.Id)"
+            Stop-Process -Id $app.Id -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+            # taskkill tree for any leftover children
+            & taskkill.exe /PID $app.Id /T /F 2>$null | Out-Null
+          }
+          Write-Host "Smoke OK: install + launch survival + teardown"
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ inputs.artifact_prefix }}-x64-exe
+          path: |
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.blockmap
+          retention-days: ${{ inputs.artifact_retention_days }}
+          if-no-files-found: error
+
+      - name: Upload Windows update manifest + checksums
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ inputs.artifact_prefix }}-x64-update-manifest
+          path: |
+            apps/desktop/release/latest.yml
+            apps/desktop/release/*-win.yml
+            apps/desktop/release/*.yml
+            apps/desktop/release/SHA256SUMS.txt
+          retention-days: ${{ inputs.artifact_retention_days }}
+          if-no-files-found: error

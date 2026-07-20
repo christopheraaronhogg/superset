@@ -48,15 +48,27 @@ function isPrereleaseBuild(): boolean {
 }
 
 const IS_PRERELEASE = isPrereleaseBuild();
-const IS_AUTO_UPDATE_PLATFORM = PLATFORM.IS_MAC || PLATFORM.IS_LINUX;
+const IS_AUTO_UPDATE_PLATFORM =
+	PLATFORM.IS_MAC || PLATFORM.IS_LINUX || PLATFORM.IS_WINDOWS;
+
+function resolveGithubRepoSlug(): string {
+	const fromEnv = process.env.GITHUB_REPOSITORY?.trim();
+	if (fromEnv?.includes("/")) return fromEnv;
+	// Upstream/local default. Fork Windows builds inject GITHUB_REPOSITORY in CI
+	// so installers point electron-updater at the fork release feed.
+	return "superset-sh/superset";
+}
+
+const GITHUB_REPO_SLUG = resolveGithubRepoSlug();
 
 // Use explicit feed URLs to ensure we always fetch platform-specific manifests
-// (for example latest-mac.yml and latest-linux.yml) from the correct release.
+// (for example latest-mac.yml, latest-linux.yml, and latest.yml) from the correct release.
 // - Stable: fetches from /releases/latest/download/ (latest non-prerelease)
 // - Canary: fetches from /releases/download/desktop-canary/ (rolling canary tag)
+// - Windows fork lane: releases/download/windows-v*/ via fork latest.yml
 const UPDATE_FEED_URL = IS_PRERELEASE
-	? "https://github.com/superset-sh/superset/releases/download/desktop-canary"
-	: "https://github.com/superset-sh/superset/releases/latest/download";
+	? `https://github.com/${GITHUB_REPO_SLUG}/releases/download/desktop-canary`
+	: `https://github.com/${GITHUB_REPO_SLUG}/releases/latest/download`;
 
 export type { AutoUpdateStatusEvent } from "shared/auto-update";
 
@@ -194,7 +206,7 @@ export function checkForUpdatesInteractive(): void {
 		dialog.showMessageBox({
 			type: "info",
 			title: "Updates",
-			message: "Auto-updates are only available on macOS and Linux.",
+			message: "Auto-updates are not available on this platform.",
 		});
 		return;
 	}
