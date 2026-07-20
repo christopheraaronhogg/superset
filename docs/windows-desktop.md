@@ -13,6 +13,18 @@ License remains **Elastic License 2.0 (ELv2)**. See `LICENSE.md`. Upstream proje
 - Optional `.blockmap` (when electron-builder emits it)
 - `SHA256SUMS.txt`
 
+## Auto-update feed
+
+Packaged Windows builds poll a **rolling** GitHub release tag, not GitHub’s global `/releases/latest` (that pointer stays free for upstream macOS/Linux `desktop-v*` releases):
+
+| Stream | Tag / endpoint | Consumer |
+| --- | --- | --- |
+| Windows stable (versioned) | `windows-v*` | Manual download, provenance |
+| Windows stable (rolling) | `windows-latest` → `…/releases/download/windows-latest/latest.yml` | electron-updater on Windows |
+| macOS/Linux stable | `/releases/latest/download` | electron-updater (unchanged) |
+
+Each `windows-v*` publish refreshes `windows-latest` with the same assets. Fork builds bake `GITHUB_REPOSITORY` so the feed resolves on this fork.
+
 ## Remaining limitation: unsigned installer
 
 Unless a Windows Authenticode signing certificate is configured in CI (`CSC_LINK` / related secrets), the installer is **unsigned**. Windows SmartScreen may show a warning on first download/launch. **Do not** use a self-signed certificate as a substitute for real signing.
@@ -27,7 +39,10 @@ This fork intentionally keeps unsigned packaging explicit and functional rather 
 
 ## Release (maintainers)
 
-Tags of the form `windows-v*` trigger [`.github/workflows/release-desktop-windows.yml`](../.github/workflows/release-desktop-windows.yml), which builds on `windows-latest`, runs smoke checks, and publishes a **normal (non-prerelease)** GitHub release with installer + manifest + checksums.
+Tags of the form `windows-v*` trigger [`.github/workflows/release-desktop-windows.yml`](../.github/workflows/release-desktop-windows.yml), which builds on `windows-latest`, runs smoke checks, and publishes:
+
+1. A **versioned** `windows-v*` release (`--latest=false`, historical download)
+2. A **rolling** `windows-latest` release (durable auto-update endpoint)
 
 ```bash
 git tag windows-v1.15.1

@@ -98,18 +98,50 @@ jobs:
           - License: Elastic License 2.0 (ELv2). See `LICENSE.md`.
 
           Assets include the NSIS installer, `latest.yml` update manifest, optional blockmap, and `SHA256SUMS.txt`.
+
+          Auto-update feed (durable): this workflow also refreshes the rolling
+          `windows-latest` release that packaged Windows builds poll. Versioned
+          `windows-v*` tags stay off GitHub's global `/releases/latest` pointer
+          so macOS/Linux desktop feeds are unaffected.
           EOF
           )
-          # Normal non-prerelease release (not draft) for windows-v* tags.
-          # Mark as GitHub "latest" so electron-updater feed
-          # `/releases/latest/download/latest.yml` resolves on this Windows-only fork.
+          # Versioned windows-v* release: historical download + provenance.
+          # Keep --latest=false so this lane never steals GitHub's global latest
+          # from upstream desktop-v* (macOS/Linux) releases.
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" release-artifacts/* --clobber
-            gh release edit "$TAG" --notes "$NOTES" --prerelease=false --draft=false --latest=true
+            gh release edit "$TAG" --notes "$NOTES" --prerelease=false --draft=false --latest=false
           else
             gh release create "$TAG" \
               release-artifacts/* \
               --title "Superset Desktop Windows ${TAG#windows-v}" \
               --notes "$NOTES" \
-              --latest=true
+              --latest=false
           fi
+
+          # Rolling durable auto-update endpoint used by packaged Windows builds
+          # (apps/desktop/src/main/lib/auto-update-feed.ts → WINDOWS_STABLE_UPDATE_TAG).
+          # Mirrors the desktop-canary pattern: delete + recreate so assets and
+          # target commit always match the just-published windows-v* build.
+          ROLLING_TAG="windows-latest"
+          ROLLING_NOTES=$(cat <<EOF
+          ## Windows stable auto-update feed
+
+          Rolling release for electron-updater. Packaged Windows builds fetch:
+
+          \`https://github.com/${{ github.repository }}/releases/download/${ROLLING_TAG}/latest.yml\`
+
+          Source version tag: \`${TAG}\`
+          Commit: \`${{ github.sha }}\`
+
+          Prefer the versioned \`${TAG}\` release for manual downloads / checksums.
+          EOF
+          )
+          gh release delete "$ROLLING_TAG" --yes --cleanup-tag || true
+          git push origin ":refs/tags/${ROLLING_TAG}" || true
+          gh release create "$ROLLING_TAG" \
+            release-artifacts/* \
+            --title "Superset Desktop Windows (latest)" \
+            --notes "$ROLLING_NOTES" \
+            --target "${{ github.sha }}" \
+            --latest=false

@@ -42,7 +42,8 @@ If both files exist, packaging produced the Linux artifact + updater metadata th
 
 This fork supports an unofficial Windows 10/11 x64 build. See
 [`docs/windows-desktop.md`](../../docs/windows-desktop.md) for install notes,
-unsigned-installer / SmartScreen limitations, and release tagging (`windows-v*`).
+unsigned-installer / SmartScreen limitations, release tagging (`windows-v*`),
+and the rolling `windows-latest` auto-update feed.
 
 From `apps/desktop` on a Windows machine (or GitHub `windows-latest`):
 
