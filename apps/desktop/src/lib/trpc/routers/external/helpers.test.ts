@@ -2,9 +2,13 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import os from "node:os";
 import path from "node:path";
 import {
+	buildSpawnInvocation,
 	getAppCommand,
+	isWindowsBatchFile,
+	quoteWindowsCmdArg,
 	RelativePathWithoutCwdError,
 	resolvePath,
+	resolveWindowsCommandPath,
 	stripPathWrappers,
 } from "./helpers";
 
@@ -637,6 +641,158 @@ describe("resolvePath guards against process.cwd() fallback", () => {
 	test("a relative path with a cwd resolves correctly", () => {
 		expect(resolvePath("src/index.ts", "/workspace")).toBe(
 			"/workspace/src/index.ts",
+		);
+	});
+});
+
+describe("Windows spawn safety (no shell:true argv reinterpretation)", () => {
+	/** Assert every occurrence of `needle` sits inside a double-quoted segment. */
+	function assertFullyQuoted(commandLine: string, needle: string) {
+		let i = 0;
+		while (i < commandLine.length) {
+			const at = commandLine.indexOf(needle, i);
+			if (at === -1) return;
+			let inQuote = false;
+			for (let j = 0; j < at; j++) {
+				if (commandLine[j] === '"') inQuote = !inQuote;
+			}
+			expect(inQuote).toBe(true);
+			i = at + needle.length;
+		}
+	}
+
+	test("quoteWindowsCmdArg always wraps and escapes % and quotes", () => {
+		expect(quoteWindowsCmdArg("plain")).toBe('"plain"');
+		expect(quoteWindowsCmdArg(String.raw`C:\repo with spaces`)).toBe(
+			String.raw`"C:\repo with spaces"`,
+		);
+		expect(quoteWindowsCmdArg(String.raw`C:\a%TEMP%\b`)).toBe(
+			String.raw`"C:\a%%TEMP%%\b"`,
+		);
+		expect(quoteWindowsCmdArg(String.raw`C:\say "hi"`)).toBe(
+			String.raw`"C:\say ""hi"""`,
+		);
+	});
+
+	test("isWindowsBatchFile detects .cmd/.bat only", () => {
+		expect(isWindowsBatchFile("code.cmd")).toBe(true);
+		expect(isWindowsBatchFile("C:\\bin\\cursor.CMD")).toBe(true);
+		expect(isWindowsBatchFile("run.bat")).toBe(true);
+		expect(isWindowsBatchFile("code.exe")).toBe(false);
+		expect(isWindowsBatchFile("code")).toBe(false);
+	});
+
+	test("native .exe spawn keeps argv intact (spaces + cmd metacharacters)", () => {
+		const targetPath = String.raw`C:\Users\me\My Projects\repo (main)\foo&whoami|bar`;
+		const exe = String.raw`C:\Program Files\Cursor\cursor.exe`;
+		const inv = buildSpawnInvocation("cursor", [targetPath], {
+			platform: "win32",
+			resolvedCommandPath: exe,
+		});
+
+		expect(inv.command).toBe(exe);
+		expect(inv.args).toEqual([targetPath]);
+		expect(inv.options.shell).toBe(false);
+		expect(inv.options.windowsVerbatimArguments).toBeUndefined();
+		// Path is a single argv element — CreateProcess will not interpret & | ()
+		expect(inv.args).toHaveLength(1);
+		expect(inv.args[0]).toBe(targetPath);
+	});
+
+	test("cmd adapter quotes path with spaces and metacharacters; shell stays false", () => {
+		const targetPath = String.raw`C:\Users\me\My Projects\repo (main)\foo&whoami|bar`;
+		const codeCmd = String.raw`C:\Users\me\AppData\Local\Programs\Microsoft VS Code\bin\code.cmd`;
+		const inv = buildSpawnInvocation("code", [targetPath], {
+			platform: "win32",
+			resolvedCommandPath: codeCmd,
+			comspec: String.raw`C:\Windows\System32\cmd.exe`,
+		});
+
+		expect(inv.command).toBe(String.raw`C:\Windows\System32\cmd.exe`);
+		expect(inv.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+		expect(inv.options.shell).toBe(false);
+		expect(inv.options.windowsVerbatimArguments).toBe(true);
+
+		const cmdline = inv.args[3] ?? "";
+		expect(cmdline).toBe(
+			[codeCmd, targetPath].map(quoteWindowsCmdArg).join(" "),
+		);
+		// Metacharacters only appear inside quoted segments — not as shell syntax.
+		assertFullyQuoted(cmdline, "&");
+		assertFullyQuoted(cmdline, "|");
+		assertFullyQuoted(cmdline, "(");
+		assertFullyQuoted(cmdline, ")");
+		// The full target path (including spaces) is one quoted token, not split.
+		expect(cmdline).toContain(quoteWindowsCmdArg(targetPath));
+		expect(quoteWindowsCmdArg(targetPath)).toContain("My Projects");
+	});
+
+	test("unresolved bare name still spawns shell-free (no shell:true)", () => {
+		const targetPath = String.raw`C:\ws\a&b`;
+		const inv = buildSpawnInvocation("some-editor", [targetPath], {
+			platform: "win32",
+			resolvedCommandPath: null,
+		});
+		expect(inv.command).toBe("some-editor");
+		expect(inv.args).toEqual([targetPath]);
+		expect(inv.options.shell).toBe(false);
+	});
+
+	test("non-Windows platforms never enable shell", () => {
+		const inv = buildSpawnInvocation("code", ["/tmp/a&b"], {
+			platform: "darwin",
+		});
+		expect(inv.command).toBe("code");
+		expect(inv.args).toEqual(["/tmp/a&b"]);
+		expect(inv.options.shell).toBe(false);
+		expect(inv.options.windowsHide).toBe(false);
+	});
+
+	/** Windows FS is case-insensitive; unit hosts (macOS) are not. */
+	function winExists(existing: string[]): (p: string) => boolean {
+		const lower = new Set(existing.map((p) => p.toLowerCase()));
+		return (p) => lower.has(p.toLowerCase());
+	}
+
+	test("resolveWindowsCommandPath prefers .exe over .cmd via PATHEXT order", () => {
+		const found = resolveWindowsCommandPath(
+			"code",
+			{
+				PATH: String.raw`C:\tools`,
+				PATHEXT: ".COM;.EXE;.BAT;.CMD",
+			},
+			winExists([String.raw`C:\tools\code.cmd`, String.raw`C:\tools\code.exe`]),
+		);
+		expect(found?.toLowerCase()).toBe(String.raw`c:\tools\code.exe`);
+	});
+
+	test("resolveWindowsCommandPath finds .cmd when no native exe exists", () => {
+		const found = resolveWindowsCommandPath(
+			"cursor",
+			{ PATH: String.raw`C:\tools`, PATHEXT: ".COM;.EXE;.BAT;.CMD" },
+			winExists([String.raw`C:\tools\cursor.cmd`]),
+		);
+		expect(found?.toLowerCase()).toBe(String.raw`c:\tools\cursor.cmd`);
+	});
+
+	test("buildSpawnInvocation resolves bare batch launcher and uses cmd adapter", () => {
+		const targetPath = String.raw`D:\work\clone&test (x)\src`;
+		const inv = buildSpawnInvocation("code", [targetPath], {
+			platform: "win32",
+			env: {
+				PATH: String.raw`C:\editors\bin`,
+				PATHEXT: ".COM;.EXE;.BAT;.CMD",
+				ComSpec: String.raw`C:\Windows\System32\cmd.exe`,
+			},
+			existsSync: winExists([String.raw`C:\editors\bin\code.cmd`]),
+		});
+		expect(inv.command).toBe(String.raw`C:\Windows\System32\cmd.exe`);
+		expect(inv.args[0]).toBe("/d");
+		expect(inv.args[3]).toContain(quoteWindowsCmdArg(targetPath));
+		assertFullyQuoted(inv.args[3] ?? "", "&");
+		// Resolved launcher is the .cmd under PATH (case may follow PATHEXT).
+		expect(inv.args[3]?.toLowerCase()).toContain(
+			String.raw`c:\editors\bin\code.cmd`.toLowerCase(),
 		);
 	});
 });
