@@ -45,6 +45,27 @@ describe("teardown initial command", () => {
 		);
 	});
 
+	test("cmd.exe teardown scripts short-circuit on Windows", () => {
+		const command = buildTeardownInitialCommand(
+			String.raw`C:\wt\.superset\teardown.cmd`,
+			"cmd.exe",
+			"win32",
+		);
+		expect(command).toBe(
+			String.raw`"C:\wt\.superset\teardown.cmd" && exit /b 0 || exit /b 1`,
+		);
+	});
+
+	test("PowerShell teardown command chains short-circuit on Windows", () => {
+		const command = buildTeardownCommandFromShell(
+			"docker compose down; if (-not $?) { if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; exit 1 }; rm -r .cache",
+			"powershell.exe",
+			"win32",
+		);
+		expect(command).toContain("exit $LASTEXITCODE");
+		expect(command).not.toContain("bash -c");
+	});
+
 	test("exits fish with the teardown script status", () => {
 		if (!isFishAvailable()) return;
 

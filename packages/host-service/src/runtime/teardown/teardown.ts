@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { TEARDOWN_TIMEOUT_MS } from "@superset/shared/constants";
+import { buildShellCommandChain, getKnownShell } from "@superset/shared/shell";
 import type { HostDb } from "../../db";
+import { getTerminalBaseEnv } from "../../terminal/env";
+import { resolveLaunchShell } from "../../terminal/shell-launch";
 import {
 	createTerminalSessionInternal,
 	disposeSession,
@@ -65,6 +68,7 @@ export async function runTeardown({
 		projectId,
 		worktreePath,
 		homeDir,
+		shell: resolveTeardownShell(),
 	});
 	if (resolved === null) return { status: "skipped" };
 
@@ -156,10 +160,10 @@ export async function runTeardown({
 /**
  * Resolve the teardown command for a workspace, if any. Uses the shared
  * lifecycle-script posture (see `resolveScript`): configured `teardown`
- * commands — joined with ` && ` so a failing command short-circuits, worktree
- * config overriding the main repo's — then a `teardown.sh` script, worktree
- * first (state generated during the session must win) and main repo second
- * (gitignored scripts don't exist in worktrees).
+ * commands — joined with shell-aware short-circuit so a failing command stops
+ * the chain, worktree config overriding the main repo's — then a `teardown.sh`
+ * script, worktree first (state generated during the session must win) and
+ * main repo second (gitignored scripts don't exist in worktrees).
  *
  * Returns null when no source resolves to anything runnable, which the
  * caller treats as a skipped (successful) teardown.
@@ -172,18 +176,59 @@ export function resolveTeardownCommand(args: {
 	worktreePath: string;
 	/** Override $HOME for tests. */
 	homeDir?: string;
+	shell?: string;
+	platform?: NodeJS.Platform;
 }): { initialCommand: string; cwd?: string } | null {
 	const resolved = resolveScript("teardown", args);
 	if (!resolved) return null;
 
+	const platform = args.platform ?? process.platform;
 	const initialCommand =
 		resolved.kind === "commands"
-			? buildTeardownCommandFromShell(resolved.commands.join(" && "))
-			: buildTeardownInitialCommand(resolved.scriptPath);
+			? buildTeardownCommandFromShell(
+					buildShellCommandChain(resolved.commands, {
+						shell: args.shell,
+						platform,
+						mode: "exit-on-failure",
+					}),
+					args.shell,
+					platform,
+				)
+			: buildTeardownInitialCommand(resolved.scriptPath, args.shell, platform);
 	return { initialCommand, ...(resolved.cwd && { cwd: resolved.cwd }) };
 }
 
-export function buildTeardownInitialCommand(scriptPath: string): string {
+export function buildTeardownInitialCommand(
+	scriptPath: string,
+	shell?: string,
+	platform: NodeJS.Platform = process.platform,
+): string {
+	if (platform === "win32") {
+		const knownShell = shell ? getKnownShell(shell) : "unknown";
+		const lowerScriptPath = scriptPath.toLowerCase();
+		if (lowerScriptPath.endsWith(".ts")) {
+			if (knownShell === "cmd") {
+				return `bun ${doubleQuote(scriptPath)} && exit /b 0 || exit /b 1`;
+			}
+			if (knownShell === "powershell" || knownShell === "pwsh") {
+				return `bun ${powershellSingleQuote(scriptPath)}; exit $LASTEXITCODE`;
+			}
+			return `bun ${doubleQuote(scriptPath)}`;
+		}
+		if (lowerScriptPath.endsWith(".cmd") || lowerScriptPath.endsWith(".bat")) {
+			if (knownShell === "powershell" || knownShell === "pwsh") {
+				return `cmd.exe /d /s /c ${powershellSingleQuote(doubleQuote(scriptPath))}; exit $LASTEXITCODE`;
+			}
+			return `${doubleQuote(scriptPath)} && exit /b 0 || exit /b 1`;
+		}
+		if (lowerScriptPath.endsWith(".ps1")) {
+			if (knownShell === "cmd" || knownShell === "unknown") {
+				return `powershell.exe -NoProfile -ExecutionPolicy Bypass -File ${doubleQuote(scriptPath)} && exit /b 0 || exit /b 1`;
+			}
+			return `powershell.exe -NoProfile -ExecutionPolicy Bypass -File ${powershellSingleQuote(scriptPath)}; exit $LASTEXITCODE`;
+		}
+	}
+
 	// `exec` replaces the user's login shell with the teardown process. That
 	// avoids shell-specific exit-status syntax like `$?`, which breaks in fish
 	// and leaves the hidden teardown terminal open until timeout.
@@ -192,11 +237,41 @@ export function buildTeardownInitialCommand(scriptPath: string): string {
 
 /**
  * Build the initial command for configured `teardown` commands. The joined
- * command runs via `bash -c` so multiple `&&`-chained entries execute in one
- * shell; `exec` still replaces the login shell so the hidden PTY exits with
- * the teardown status (and avoids fish `$?` breakage), matching the script
- * form above.
+ * command runs via `bash -c` on POSIX so multiple chained entries execute in
+ * one shell; `exec` still replaces the login shell so the hidden PTY exits with
+ * the teardown status (and avoids fish `$?` breakage). On Windows the chain is
+ * already shell-aware and runs directly.
  */
-export function buildTeardownCommandFromShell(shellCommand: string): string {
+export function buildTeardownCommandFromShell(
+	shellCommand: string,
+	shell?: string,
+	platform: NodeJS.Platform = process.platform,
+): string {
+	if (platform === "win32") {
+		const knownShell = shell ? getKnownShell(shell) : "unknown";
+		if (knownShell === "cmd") {
+			return `${shellCommand} && exit /b 0 || exit /b 1`;
+		}
+		if (knownShell === "powershell" || knownShell === "pwsh") {
+			return `${shellCommand}; exit $LASTEXITCODE`;
+		}
+		return shellCommand;
+	}
 	return `exec bash -c ${shellSingleQuote(shellCommand)}`;
+}
+
+function powershellSingleQuote(s: string): string {
+	return `'${s.replaceAll("'", "''")}'`;
+}
+
+function doubleQuote(s: string): string {
+	return `"${s.replaceAll('"', '\\"')}"`;
+}
+
+function resolveTeardownShell(): string | undefined {
+	try {
+		return resolveLaunchShell(getTerminalBaseEnv());
+	} catch {
+		return undefined;
+	}
 }

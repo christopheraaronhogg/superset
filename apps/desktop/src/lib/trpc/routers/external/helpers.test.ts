@@ -151,6 +151,29 @@ describe("getAppCommand", () => {
 			{ command: "intellij-idea-community", args: ["/path/to/file"] },
 		]);
 	});
+
+	test("returns Windows CLI commands on Windows", () => {
+		expect(getAppCommand("vscode", "C:\\repo", "win32")).toEqual([
+			{ command: "code", args: ["C:\\repo"] },
+		]);
+		expect(getAppCommand("cursor", "C:\\repo", "win32")).toEqual([
+			{ command: "cursor", args: ["C:\\repo"] },
+		]);
+	});
+
+	test("returns Windows command candidates for multi-edition JetBrains IDEs", () => {
+		expect(getAppCommand("pycharm", "C:\\repo", "win32")).toEqual([
+			{ command: "pycharm", args: ["C:\\repo"] },
+			{ command: "pycharm64.exe", args: ["C:\\repo"] },
+			{ command: "pycharm.exe", args: ["C:\\repo"] },
+		]);
+	});
+
+	test("returns null for macOS-only apps on Windows", () => {
+		expect(getAppCommand("xcode", "C:\\repo", "win32")).toBeNull();
+		expect(getAppCommand("iterm", "C:\\repo", "win32")).toBeNull();
+		expect(getAppCommand("terminal", "C:\\repo", "win32")).toBeNull();
+	});
 });
 
 describe("resolvePath", () => {

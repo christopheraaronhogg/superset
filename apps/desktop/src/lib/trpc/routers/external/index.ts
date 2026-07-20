@@ -95,15 +95,20 @@ async function openPathInApp(
 				lastError = error instanceof Error ? error : new Error(String(error));
 				if (candidates.length > 1) {
 					console.warn(
-						`[external/openInApp] ${cmd.args[1]} not found, trying next candidate`,
+						`[external/openInApp] ${cmd.command} not found, trying next candidate`,
 					);
 				}
 			}
 		}
+		// Do not fall back to shell.openPath for a failed editor launch: that
+		// would open with the OS default and still persist the broken app as
+		// the user's preferred editor.
 		throw lastError;
 	}
 
-	await shell.openPath(filePath);
+	throw new Error(
+		`Opening paths in ${app} is not supported on ${process.platform}.`,
+	);
 }
 
 /**

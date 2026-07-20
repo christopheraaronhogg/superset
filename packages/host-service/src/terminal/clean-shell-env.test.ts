@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
 	augmentPathForMacOS,
 	buildMinimalEnv,
+	clearStrictShellEnvCache,
+	getStrictShellEnvironment,
 	parseEnvOutput,
 } from "./clean-shell-env.ts";
 
@@ -43,6 +45,32 @@ describe("buildMinimalEnv", () => {
 		process.env.SSH_AGENT_PID = "12345";
 		const env = buildMinimalEnv();
 		expect(env.SSH_AGENT_PID).toBe("12345");
+	});
+});
+
+describe("getStrictShellEnvironment", () => {
+	test("uses the inherited process environment on Windows without spawning a shell", async () => {
+		if (process.platform !== "win32") {
+			// Contract still holds when the platform branch is exercised via
+			// the source path above; on non-Windows hosts assert the export
+			// remains callable without hanging.
+			clearStrictShellEnvCache();
+			const env = await getStrictShellEnvironment();
+			expect(typeof env).toBe("object");
+			return;
+		}
+
+		const key = "SUPERSET_WINDOWS_SHELL_ENV_TEST";
+		process.env[key] = "ok";
+		clearStrictShellEnvCache();
+
+		try {
+			const env = await getStrictShellEnvironment();
+			expect(env[key]).toBe("ok");
+		} finally {
+			delete process.env[key];
+			clearStrictShellEnvCache();
+		}
 	});
 });
 

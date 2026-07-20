@@ -69,6 +69,41 @@ describe("resolveInitialCommand", () => {
 		});
 	});
 
+	it("joins multi-line setup commands with PowerShell short-circuit on Windows", () => {
+		writeConfig(sandbox.repoPath, {
+			setup: ["bun install", "bun run db:migrate"],
+		});
+		expect(
+			resolveInitialCommand({
+				repoPath: sandbox.repoPath,
+				projectId: PROJECT_ID,
+				homeDir: sandbox.homeDir,
+				platform: "win32",
+				shell: "powershell.exe",
+			}),
+		).toEqual({
+			initialCommand:
+				"bun install; if (-not $?) { if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; exit 1 }; bun run db:migrate",
+		});
+	});
+
+	it("joins multi-line setup commands with cmd.exe && on Windows", () => {
+		writeConfig(sandbox.repoPath, {
+			setup: ["bun install", "bun run db:migrate"],
+		});
+		expect(
+			resolveInitialCommand({
+				repoPath: sandbox.repoPath,
+				projectId: PROJECT_ID,
+				homeDir: sandbox.homeDir,
+				platform: "win32",
+				shell: "cmd.exe",
+			}),
+		).toEqual({
+			initialCommand: "bun install && bun run db:migrate",
+		});
+	});
+
 	it("returns the single command when setup has only one line", () => {
 		writeConfig(sandbox.repoPath, { setup: ["bun install"] });
 		expect(resolve()).toEqual({ initialCommand: "bun install" });

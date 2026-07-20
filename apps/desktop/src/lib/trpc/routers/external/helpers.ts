@@ -82,6 +82,46 @@ const LINUX_CLI_CANDIDATES: Partial<Record<ExternalApp, string[]>> = {
 	pycharm: ["pycharm", "pycharm-professional", "pycharm-community"],
 };
 
+/** Map of app IDs to their Windows CLI commands. */
+const WINDOWS_CLI_COMMANDS: Record<ExternalApp, string | null> = {
+	finder: null, // Handled specially with shell.showItemInFolder
+	vscode: "code",
+	"vscode-insiders": "code-insiders",
+	cursor: "cursor",
+	antigravity: "antigravity",
+	devin: "devin",
+	zed: "zed",
+	xcode: null, // macOS only
+	iterm: null, // macOS only
+	warp: "warp",
+	terminal: null, // macOS Terminal.app only
+	ghostty: "ghostty",
+	sublime: "subl",
+	intellij: null, // Multi-edition, uses CLI candidates
+	webstorm: "webstorm",
+	pycharm: null, // Multi-edition, uses CLI candidates
+	phpstorm: "phpstorm",
+	rubymine: "rubymine",
+	goland: "goland",
+	clion: "clion",
+	rider: "rider",
+	datagrip: "datagrip",
+	appcode: null, // macOS only
+	fleet: "fleet",
+	rustrover: "rustrover",
+	"android-studio": "studio",
+};
+
+/**
+ * CLI command candidates for JetBrains IDEs with multiple editions on Windows.
+ * JetBrains Toolbox can install scripts without extensions, while direct
+ * installs commonly expose the native executable names.
+ */
+const WINDOWS_CLI_CANDIDATES: Partial<Record<ExternalApp, string[]>> = {
+	intellij: ["idea", "idea64.exe", "idea.exe"],
+	pycharm: ["pycharm", "pycharm64.exe", "pycharm.exe"],
+};
+
 /**
  * Get candidate commands to open a path in the specified app.
  * Returns an array of commands to try in order — for multi-edition apps (IntelliJ, PyCharm),
@@ -89,6 +129,7 @@ const LINUX_CLI_CANDIDATES: Partial<Record<ExternalApp, string[]>> = {
  *
  * macOS: Uses `open -b` (bundle ID) for multi-edition apps and `open -a` (app name) for others.
  * Linux: Uses direct CLI commands (e.g. `code`, `cursor`, `zed`).
+ * Windows: Uses PATH/PATHEXT-resolved CLI commands (e.g. `code`, `cursor`, `pycharm64.exe`).
  */
 export function getAppCommand(
 	app: ExternalApp,
@@ -109,7 +150,20 @@ export function getAppCommand(
 		return [{ command: "open", args: ["-a", appName, targetPath] }];
 	}
 
-	// Linux (and other non-macOS platforms)
+	if (platform === "win32") {
+		const windowsCandidates = WINDOWS_CLI_CANDIDATES[app];
+		if (windowsCandidates) {
+			return windowsCandidates.map((cmd) => ({
+				command: cmd,
+				args: [targetPath],
+			}));
+		}
+
+		const cliCommand = WINDOWS_CLI_COMMANDS[app];
+		if (!cliCommand) return null;
+		return [{ command: cliCommand, args: [targetPath] }];
+	}
+
 	const linuxCandidates = LINUX_CLI_CANDIDATES[app];
 	if (linuxCandidates) {
 		return linuxCandidates.map((cmd) => ({
@@ -327,6 +381,10 @@ export function spawnAsync(command: string, args: string[]): Promise<void> {
 		const child = spawn(command, args, {
 			stdio: ["ignore", "ignore", "pipe"],
 			detached: false,
+			// Allow PATH/PATHEXT resolution for Windows editor launchers
+			// (code.cmd, cursor.cmd, idea64.exe, etc.).
+			shell: process.platform === "win32",
+			windowsHide: true,
 		});
 
 		let stderr = "";

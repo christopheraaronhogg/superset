@@ -32,6 +32,11 @@ const defaultFs: FsLike = {
 		readdirSync(dir, options) as unknown as DirentLike[],
 };
 
+export function isTruthyEnv(value: string | undefined): boolean {
+	if (!value) return false;
+	return /^(1|true|yes|on)$/i.test(value.trim());
+}
+
 function listDirectories(fs: FsLike, dir: string): string[] {
 	if (!fs.existsSync(dir)) return [];
 
@@ -104,7 +109,9 @@ export function checkWindowsNativeBuildPrerequisites(
 		};
 	}
 
-	if (env.SUPERSET_SKIP_WINDOWS_NATIVE_BUILD_PREREQ_CHECK) {
+	// Only explicit truthy values skip the check. `"0"`, `"false"`, and empty
+	// strings must not disable the prereq gate (CI sets `"0"` as a no-op).
+	if (isTruthyEnv(env.SUPERSET_SKIP_WINDOWS_NATIVE_BUILD_PREREQ_CHECK)) {
 		return {
 			checked: false,
 			missing: [],

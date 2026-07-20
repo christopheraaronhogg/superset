@@ -1,4 +1,9 @@
 import { workspaces, worktrees } from "@superset/local-db";
+import {
+	appendShellLineEnding,
+	buildShellChangeDirectoryCommand,
+	buildShellCommandChain,
+} from "@superset/shared/shell";
 import { TRPCError } from "@trpc/server";
 import { observable } from "@trpc/server/observable";
 import { eq } from "drizzle-orm";
@@ -13,6 +18,7 @@ import {
 } from "main/lib/terminal/errors";
 import { getTerminalHostClient } from "main/lib/terminal-host/client";
 import { getWorkspaceRuntimeRegistry } from "main/lib/workspace-runtime";
+import type { TerminalRuntime } from "main/lib/workspace-runtime/types";
 import { z } from "zod";
 import { publicProcedure, router } from "../..";
 import { assertWorkspaceUsable } from "../workspaces/utils/usability";
@@ -22,6 +28,18 @@ import { getWorkspaceTerminalContext, resolveCwd } from "./utils";
 const DEBUG_TERMINAL = process.env.SUPERSET_TERMINAL_DEBUG === "1";
 const logger = console;
 let createOrAttachCallCounter = 0;
+
+async function resolveTerminalShell(
+	terminal: TerminalRuntime,
+	paneId: string,
+): Promise<string | undefined> {
+	try {
+		const { sessions } = await terminal.management.listSessions();
+		return sessions.find((session) => session.sessionId === paneId)?.shell;
+	} catch {
+		return undefined;
+	}
+}
 
 const SAFE_ID = z
 	.string()
@@ -225,6 +243,61 @@ export const createTerminalRouter = () => {
 						error instanceof Error ? error.message : "Write failed";
 
 					// Emit exit instead of error for deleted sessions to prevent toast floods
+					if (message.includes("not found or not alive")) {
+						terminal.emit(`exit:${input.paneId}`, 0, 15);
+						if (shouldThrow) {
+							throw new TRPCError({
+								code: "BAD_REQUEST",
+								message,
+							});
+						}
+						return;
+					}
+
+					terminal.emit(`error:${input.paneId}`, {
+						error: message,
+						code: "WRITE_FAILED",
+					});
+					if (shouldThrow) {
+						throw new TRPCError({
+							code: "INTERNAL_SERVER_ERROR",
+							message,
+						});
+					}
+				}
+			}),
+
+		writeCommands: publicProcedure
+			.input(
+				z.object({
+					paneId: z.string(),
+					commands: z.array(z.string().trim().min(1)).min(1),
+					cwd: z.string().trim().min(1).optional(),
+					throwOnError: z.boolean().optional(),
+				}),
+			)
+			.mutation(async ({ input }) => {
+				const shouldThrow = input.throwOnError ?? false;
+				const shell = await resolveTerminalShell(terminal, input.paneId);
+				const commandChain = buildShellCommandChain(
+					input.cwd
+						? [
+								buildShellChangeDirectoryCommand(input.cwd, shell),
+								...input.commands,
+							]
+						: input.commands,
+					{ shell, platform: process.platform },
+				);
+
+				try {
+					terminal.write({
+						paneId: input.paneId,
+						data: appendShellLineEnding(commandChain, shell),
+					});
+				} catch (error) {
+					const message =
+						error instanceof Error ? error.message : "Write failed";
+
 					if (message.includes("not found or not alive")) {
 						terminal.emit(`exit:${input.paneId}`, 0, 15);
 						if (shouldThrow) {

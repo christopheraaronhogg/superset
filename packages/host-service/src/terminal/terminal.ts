@@ -4,6 +4,11 @@ import { StringDecoder } from "node:string_decoder";
 import type { NodeWebSocket } from "@hono/node-ws";
 import { hasRunningForegroundProcess } from "@superset/pty-daemon/process-tree";
 import {
+	appendShellLineEnding,
+	buildShellChangeDirectoryCommand,
+	buildShellCommandChain,
+} from "@superset/shared/shell";
+import {
 	createScanState,
 	SHELLS_WITH_READY_MARKER,
 	type ShellReadyScanState,
@@ -213,6 +218,8 @@ type ShellReadyState = "pending" | "ready" | "timed_out" | "unsupported";
 interface TerminalSession {
 	terminalId: string;
 	workspaceId: string;
+	/** Launch shell path used for this session (cmd / PowerShell / bash / …). */
+	shell: string;
 	pty: DaemonPty;
 	cols: number;
 	rows: number;
@@ -468,6 +475,48 @@ export function writeInputToSession({
 	}
 
 	session.pty.write(data);
+	return { success: true };
+}
+
+export function writeCommandsToSession({
+	terminalId,
+	workspaceId,
+	commands,
+	cwd,
+}: {
+	terminalId: string;
+	workspaceId: string;
+	commands: string[];
+	cwd?: string;
+}): { success: true } | { error: string } {
+	const session = sessions.get(terminalId);
+	if (!session) {
+		return { error: "Terminal session not found" };
+	}
+	if (session.workspaceId !== workspaceId) {
+		return { error: "Terminal session does not belong to this workspace" };
+	}
+	if (session.exited) {
+		return { error: "Terminal session has exited" };
+	}
+
+	const runnableCommands = commands.filter(
+		(command) => command.trim().length > 0,
+	);
+	if (runnableCommands.length === 0) {
+		return { error: "No commands provided" };
+	}
+
+	const commandChain = buildShellCommandChain(
+		cwd
+			? [
+					buildShellChangeDirectoryCommand(cwd, session.shell),
+					...runnableCommands,
+				]
+			: runnableCommands,
+		{ shell: session.shell, platform: process.platform },
+	);
+	session.pty.write(appendShellLineEnding(commandChain, session.shell));
 	return { success: true };
 }
 
@@ -1150,6 +1199,7 @@ export async function createTerminalSessionInternal({
 	const session: TerminalSession = {
 		terminalId,
 		workspaceId,
+		shell,
 		pty,
 		cols,
 		rows,

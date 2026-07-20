@@ -100,6 +100,37 @@ describe("checkWindowsNativeBuildPrerequisites", () => {
 		expect(result.skipped).toBe(true);
 	});
 
+	it('does not treat SUPERSET_SKIP_WINDOWS_NATIVE_BUILD_PREREQ_CHECK="0" as skip', () => {
+		const result = checkWindowsNativeBuildPrerequisites({
+			env: {
+				...env,
+				SUPERSET_SKIP_WINDOWS_NATIVE_BUILD_PREREQ_CHECK: "0",
+			},
+			fs: fakeFs([]),
+			platform: "win32",
+		});
+
+		expect(result.skipped).toBe(false);
+		expect(result.checked).toBe(true);
+		expect(result.ok).toBe(false);
+		expect(result.missing.length).toBeGreaterThan(0);
+	});
+
+	it("does not treat false/empty skip values as truthy", () => {
+		for (const skip of ["", "false", "no", "off"]) {
+			const result = checkWindowsNativeBuildPrerequisites({
+				env: {
+					...env,
+					SUPERSET_SKIP_WINDOWS_NATIVE_BUILD_PREREQ_CHECK: skip,
+				},
+				fs: fakeFs([]),
+				platform: "win32",
+			});
+			expect(result.skipped).toBe(false);
+			expect(result.checked).toBe(true);
+		}
+	});
+
 	it("reports missing Spectre libraries when the MSVC toolset exists", () => {
 		const result = checkWindowsNativeBuildPrerequisites({
 			env,

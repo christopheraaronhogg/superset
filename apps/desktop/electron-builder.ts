@@ -167,7 +167,6 @@ const config: Configuration = {
 		oneClick: false,
 		perMachine: false,
 		allowToChangeInstallationDirectory: true,
-		include: join(pkg.resources, "build/installer/installer.nsh"),
 	},
 };
 

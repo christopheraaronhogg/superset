@@ -115,6 +115,24 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
         run: bun run compile:app
 
+      # Match apps/desktop package.json `prebuild` / `prepackage` contract:
+      # materialize and validate native modules before electron-builder packs.
+      - name: Copy native modules
+        working-directory: apps/desktop
+        shell: bash
+        env:
+          TARGET_PLATFORM: win32
+          TARGET_ARCH: x64
+        run: bun run copy:native-modules
+
+      - name: Validate native runtime
+        working-directory: apps/desktop
+        shell: bash
+        env:
+          TARGET_PLATFORM: win32
+          TARGET_ARCH: x64
+        run: bun run validate:native-runtime
+
       - name: Build Electron app (NSIS, unsigned)
         working-directory: apps/desktop
         shell: bash
