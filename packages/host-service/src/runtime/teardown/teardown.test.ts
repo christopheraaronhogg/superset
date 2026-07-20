@@ -56,6 +56,34 @@ describe("teardown initial command", () => {
 		);
 	});
 
+	test("cmd.exe runs Windows teardown.sh via Git Bash with double-quote paths (spaces)", () => {
+		const command = buildTeardownInitialCommand(
+			String.raw`C:\Users\me\My Project\.superset\teardown.sh`,
+			"cmd.exe",
+			"win32",
+		);
+		expect(command).toBe(
+			String.raw`bash "C:\Users\me\My Project\.superset\teardown.sh" && exit /b 0 || exit /b 1`,
+		);
+		// Neither POSIX `exec` nor single-quote path form — both break in cmd.exe.
+		expect(command).not.toContain("exec bash");
+		expect(command).not.toContain("'C:");
+		expect(command).not.toMatch(/^bash '/);
+	});
+
+	test("PowerShell 5.1 runs Windows teardown.sh via Git Bash with single-quote paths (spaces)", () => {
+		const command = buildTeardownInitialCommand(
+			String.raw`C:\Users\me\My Project\.superset\teardown.sh`,
+			"powershell.exe",
+			"win32",
+		);
+		expect(command).toBe(
+			String.raw`bash 'C:\Users\me\My Project\.superset\teardown.sh'; exit $LASTEXITCODE`,
+		);
+		expect(command).not.toContain("exec bash");
+		expect(command).not.toMatch(/bash "/);
+	});
+
 	test("PowerShell teardown command chains short-circuit on Windows", () => {
 		const command = buildTeardownCommandFromShell(
 			"docker compose down; if (-not $?) { if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; exit 1 }; rm -r .cache",

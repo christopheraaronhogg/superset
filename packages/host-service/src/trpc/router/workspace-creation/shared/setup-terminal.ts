@@ -143,7 +143,9 @@ export function buildSetupScriptCommand(
 			}
 			return `powershell.exe -NoProfile -ExecutionPolicy Bypass -File ${powershellSingleQuote(scriptPath)}; if (-not $?) { exit 1 }`;
 		}
-		// Portable .ts / .sh on Windows: prefer bun for .ts, bash for .sh
+		// Portable .ts / .sh on Windows: prefer bun for .ts; run .sh via Git Bash
+		// with shell-specific Windows quoting (POSIX single quotes are not
+		// quoting syntax in cmd.exe / PowerShell).
 		if (lower.endsWith(".ts")) {
 			if (knownShell === "cmd") {
 				return `bun ${doubleQuote(scriptPath)} && exit /b 0 || exit /b 1`;
@@ -152,6 +154,16 @@ export function buildSetupScriptCommand(
 				return `bun ${powershellSingleQuote(scriptPath)}; if (-not $?) { exit 1 }`;
 			}
 			return `bun ${doubleQuote(scriptPath)}`;
+		}
+		if (lower.endsWith(".sh")) {
+			if (knownShell === "powershell" || knownShell === "pwsh") {
+				return `bash ${powershellSingleQuote(scriptPath)}; if (-not $?) { exit 1 }`;
+			}
+			if (knownShell === "cmd" || knownShell === "unknown") {
+				return `bash ${doubleQuote(scriptPath)} && exit /b 0 || exit /b 1`;
+			}
+			// Session shell is already Git Bash / POSIX: single-quote the path.
+			return `bash ${shellSingleQuote(scriptPath)}`;
 		}
 	}
 

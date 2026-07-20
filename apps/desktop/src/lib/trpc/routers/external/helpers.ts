@@ -521,9 +521,13 @@ export function buildSpawnInvocation(
 	const target = resolved ?? command;
 
 	if (isWindowsBatchFile(target)) {
-		// Single /c string: each token robustly quoted so spaces and cmd
-		// metacharacters in the workspace path stay one argument.
-		const cmdline = [target, ...args].map(quoteWindowsCmdArg).join(" ");
+		// Explicit cmd.exe /d /s /c form. With /s, cmd strips the first and last
+		// quote of the /c string, so the payload needs a distinct outer pair
+		// around the complete command (inner per-token quotes preserved):
+		//   ""C:\...\code.cmd" "C:\...\target with spaces""
+		// See: https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/cmd
+		const innerCmdline = [target, ...args].map(quoteWindowsCmdArg).join(" ");
+		const cmdline = `"${innerCmdline}"`;
 		const comspec =
 			options.comspec ??
 			options.env?.ComSpec ??

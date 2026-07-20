@@ -230,6 +230,19 @@ export function buildTeardownInitialCommand(
 			}
 			return `powershell.exe -NoProfile -ExecutionPolicy Bypass -File ${powershellSingleQuote(scriptPath)}; exit $LASTEXITCODE`;
 		}
+		// Portable .sh on Windows: run through Git Bash with shell-specific
+		// quoting. Do not emit POSIX `exec bash '…'` into cmd.exe / PowerShell —
+		// single quotes are not quoting there, and neither shell has `exec`.
+		if (lowerScriptPath.endsWith(".sh")) {
+			if (knownShell === "powershell" || knownShell === "pwsh") {
+				return `bash ${powershellSingleQuote(scriptPath)}; exit $LASTEXITCODE`;
+			}
+			if (knownShell === "cmd" || knownShell === "unknown") {
+				return `bash ${doubleQuote(scriptPath)} && exit /b 0 || exit /b 1`;
+			}
+			// Session shell is already Git Bash / POSIX: keep exec + single-quote.
+			return `exec bash ${shellSingleQuote(scriptPath)}`;
+		}
 	}
 
 	// `exec` replaces the user's login shell with the teardown process. That

@@ -699,7 +699,7 @@ describe("Windows spawn safety (no shell:true argv reinterpretation)", () => {
 		expect(inv.args[0]).toBe(targetPath);
 	});
 
-	test("cmd adapter quotes path with spaces and metacharacters; shell stays false", () => {
+	test("cmd adapter uses outer /s /c envelope plus inner per-token quotes; shell stays false", () => {
 		const targetPath = String.raw`C:\Users\me\My Projects\repo (main)\foo&whoami|bar`;
 		const codeCmd = String.raw`C:\Users\me\AppData\Local\Programs\Microsoft VS Code\bin\code.cmd`;
 		const inv = buildSpawnInvocation("code", [targetPath], {
@@ -714,17 +714,26 @@ describe("Windows spawn safety (no shell:true argv reinterpretation)", () => {
 		expect(inv.options.windowsVerbatimArguments).toBe(true);
 
 		const cmdline = inv.args[3] ?? "";
-		expect(cmdline).toBe(
-			[codeCmd, targetPath].map(quoteWindowsCmdArg).join(" "),
-		);
-		// Metacharacters only appear inside quoted segments — not as shell syntax.
-		assertFullyQuoted(cmdline, "&");
-		assertFullyQuoted(cmdline, "|");
-		assertFullyQuoted(cmdline, "(");
-		assertFullyQuoted(cmdline, ")");
+		const quotedCmd = quoteWindowsCmdArg(codeCmd);
+		const quotedTarget = quoteWindowsCmdArg(targetPath);
+		const inner = `${quotedCmd} ${quotedTarget}`;
+		// Outer envelope: /s strips the first+last quote of the /c string.
+		expect(cmdline).toBe(`"${inner}"`);
+		expect(cmdline.startsWith('"')).toBe(true);
+		expect(cmdline.endsWith('"')).toBe(true);
+		// Inner per-token quotes are preserved as distinct pairs.
+		expect(cmdline).toContain(quotedCmd);
+		expect(cmdline).toContain(quotedTarget);
+		// After /s strip of outer pair, the remaining string is the inner payload.
+		const afterStrip = cmdline.slice(1, -1);
+		expect(afterStrip).toBe(inner);
+		// Metacharacters only appear inside quoted segments of the stripped form.
+		assertFullyQuoted(afterStrip, "&");
+		assertFullyQuoted(afterStrip, "|");
+		assertFullyQuoted(afterStrip, "(");
+		assertFullyQuoted(afterStrip, ")");
 		// The full target path (including spaces) is one quoted token, not split.
-		expect(cmdline).toContain(quoteWindowsCmdArg(targetPath));
-		expect(quoteWindowsCmdArg(targetPath)).toContain("My Projects");
+		expect(quotedTarget).toContain("My Projects");
 	});
 
 	test("unresolved bare name still spawns shell-free (no shell:true)", () => {
@@ -788,10 +797,15 @@ describe("Windows spawn safety (no shell:true argv reinterpretation)", () => {
 		});
 		expect(inv.command).toBe(String.raw`C:\Windows\System32\cmd.exe`);
 		expect(inv.args[0]).toBe("/d");
-		expect(inv.args[3]).toContain(quoteWindowsCmdArg(targetPath));
-		assertFullyQuoted(inv.args[3] ?? "", "&");
+		const cmdline = inv.args[3] ?? "";
+		// Outer envelope present; inner token quotes intact after strip.
+		expect(cmdline.startsWith('"')).toBe(true);
+		expect(cmdline.endsWith('"')).toBe(true);
+		const afterStrip = cmdline.slice(1, -1);
+		expect(afterStrip).toContain(quoteWindowsCmdArg(targetPath));
+		assertFullyQuoted(afterStrip, "&");
 		// Resolved launcher is the .cmd under PATH (case may follow PATHEXT).
-		expect(inv.args[3]?.toLowerCase()).toContain(
+		expect(cmdline.toLowerCase()).toContain(
 			String.raw`c:\editors\bin\code.cmd`.toLowerCase(),
 		);
 	});
