@@ -445,7 +445,9 @@ export function getCodexGlobalHooksJsonContent(
  * lifecycle events.
  */
 export function createCodexHooksJson(): void {
-	const notifyScriptPath = getNotifyScriptPath();
+	// Codex runs hooks via /bin/sh -lc (Git Bash on Windows), so always use
+	// the POSIX notify.sh path even when the host platform is win32.
+	const notifyScriptPath = getNotifyScriptPath("linux");
 	const globalPath = getCodexGlobalHooksJsonPath();
 	const content = getCodexGlobalHooksJsonContent(notifyScriptPath);
 	if (content === null) return;
