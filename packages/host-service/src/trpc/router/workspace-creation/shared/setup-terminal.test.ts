@@ -104,6 +104,25 @@ describe("resolveInitialCommand", () => {
 		});
 	});
 
+	it("discovers Windows setup.cmd fallback without bash", () => {
+		const dir = join(sandbox.repoPath, ".superset");
+		mkdirSync(dir, { recursive: true });
+		const scriptPath = join(dir, "setup.cmd");
+		writeFileSync(scriptPath, "@echo off\r\necho hi\r\n", "utf-8");
+
+		expect(
+			resolveInitialCommand({
+				repoPath: sandbox.repoPath,
+				projectId: PROJECT_ID,
+				homeDir: sandbox.homeDir,
+				platform: "win32",
+				shell: "cmd.exe",
+			}),
+		).toEqual({
+			initialCommand: `"${scriptPath}" && exit /b 0 || exit /b 1`,
+		});
+	});
+
 	it("returns the single command when setup has only one line", () => {
 		writeConfig(sandbox.repoPath, { setup: ["bun install"] });
 		expect(resolve()).toEqual({ initialCommand: "bun install" });

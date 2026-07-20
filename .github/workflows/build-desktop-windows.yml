@@ -66,9 +66,8 @@ jobs:
       - name: Install desktop native dependencies
         working-directory: apps/desktop
         shell: bash
-        env:
-          # GitHub-hosted images include VS Build Tools; allow explicit bypass if image drifts.
-          SUPERSET_SKIP_WINDOWS_NATIVE_BUILD_PREREQ_CHECK: "0"
+        # Do not set SUPERSET_SKIP_WINDOWS_NATIVE_BUILD_PREREQ_CHECK here.
+        # Only SUPERSET_SKIP...=1|true|yes|on bypasses preflight; "0" is ignored.
         run: bun run install:deps
 
       - name: Set version suffix

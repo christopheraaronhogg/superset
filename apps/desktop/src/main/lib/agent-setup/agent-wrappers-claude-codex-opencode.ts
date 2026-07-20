@@ -287,7 +287,9 @@ export function createClaudeWrapper(): void {
  * Creates the Codex wrapper that injects Superset's notify/session-log logic.
  */
 export function createCodexWrapper(): void {
-	const notifyPath = getNotifyScriptPath();
+	// Codex wrapper is a POSIX shell script (Git Bash on Windows), so the
+	// notify path must be the .sh hook even when the host platform is win32.
+	const notifyPath = getNotifyScriptPath("linux");
 	const script = buildWrapperScript(
 		"codex",
 		buildCodexWrapperExecLine(notifyPath),

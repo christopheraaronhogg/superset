@@ -179,10 +179,13 @@ export function resolveTeardownCommand(args: {
 	shell?: string;
 	platform?: NodeJS.Platform;
 }): { initialCommand: string; cwd?: string } | null {
-	const resolved = resolveScript("teardown", args);
+	const platform = args.platform ?? process.platform;
+	const resolved = resolveScript("teardown", {
+		...args,
+		platform,
+	});
 	if (!resolved) return null;
 
-	const platform = args.platform ?? process.platform;
 	const initialCommand =
 		resolved.kind === "commands"
 			? buildTeardownCommandFromShell(

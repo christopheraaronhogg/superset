@@ -97,10 +97,13 @@ export function resolveInitialCommand(args: {
 	shell?: string;
 	platform?: NodeJS.Platform;
 }): { initialCommand: string; cwd?: string } | null {
-	const resolved = resolveScript("setup", args);
+	const platform = args.platform ?? process.platform;
+	const resolved = resolveScript("setup", {
+		...args,
+		platform,
+	});
 	if (!resolved) return null;
 
-	const platform = args.platform ?? process.platform;
 	const initialCommand =
 		resolved.kind === "commands"
 			? buildSetupCommand(resolved.commands, args.shell, platform)
