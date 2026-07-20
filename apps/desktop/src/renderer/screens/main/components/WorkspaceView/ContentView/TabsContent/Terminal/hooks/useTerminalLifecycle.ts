@@ -3,7 +3,6 @@ import type { SearchAddon } from "@xterm/addon-search";
 import type { IDisposable, ITheme, Terminal as XTerm } from "@xterm/xterm";
 import type { MutableRefObject, RefObject } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { writeCommandInPane } from "renderer/lib/terminal/launch-command";
 import type { DetectedLink } from "renderer/lib/terminal/links";
 import { runWhenParserIdle } from "renderer/lib/terminal/parser-idle-gate";
 import {
@@ -43,6 +42,7 @@ import {
 	recoverWorkspaceRunPane,
 	resolveWorkspaceRunAttachMode,
 	setPaneWorkspaceRunState,
+	type WorkspaceRunRestartCommand,
 } from "./workspaceRun";
 
 type RegisterCallback = (paneId: string, callback: () => void) => void;
@@ -143,13 +143,15 @@ export interface UseTerminalLifecycleOptions {
 		(paneId: string, callback: (text: string) => void) => void
 	>;
 	unregisterPasteCallbackRef: MutableRefObject<UnregisterCallback>;
-	defaultRestartCommandRef: MutableRefObject<string | undefined>;
+	defaultRestartCommandRef: MutableRefObject<
+		WorkspaceRunRestartCommand | undefined
+	>;
 }
 
 export interface UseTerminalLifecycleReturn {
 	xtermInstance: XTerm | null;
 	restartTerminal: (options?: {
-		command?: string;
+		command?: WorkspaceRunRestartCommand;
 		forceRestart?: boolean;
 	}) => Promise<void>;
 }
@@ -204,11 +206,16 @@ export function useTerminalLifecycle({
 }: UseTerminalLifecycleOptions): UseTerminalLifecycleReturn {
 	const [xtermInstance, setXtermInstance] = useState<XTerm | null>(null);
 	const restartTerminalRef = useRef<
-		(options?: { command?: string; forceRestart?: boolean }) => Promise<void>
+		(options?: {
+			command?: WorkspaceRunRestartCommand;
+			forceRestart?: boolean;
+		}) => Promise<void>
 	>(() => Promise.resolve());
 	const restartTerminal = useCallback(
-		(options?: { command?: string; forceRestart?: boolean }) =>
-			restartTerminalRef.current(options),
+		(options?: {
+			command?: WorkspaceRunRestartCommand;
+			forceRestart?: boolean;
+		}) => restartTerminalRef.current(options),
 		[],
 	);
 
@@ -331,16 +338,16 @@ export function useTerminalLifecycle({
 			if (!requestId) return;
 			cancelCreateOrAttachRef.current({ paneId, requestId });
 		};
-		const writeWorkspaceRunCommand = async (command: string) => {
-			await writeCommandInPane({
+		const writeWorkspaceRunCommands = async (commands: string[]) => {
+			await electronTrpcClient.terminal.writeCommands.mutate({
 				paneId,
-				command,
-				write: (input) => electronTrpcClient.terminal.write.mutate(input),
+				commands,
+				throwOnError: true,
 			});
 		};
 
 		const restartTerminalSession = (options?: {
-			command?: string;
+			command?: WorkspaceRunRestartCommand;
 			forceRestart?: boolean;
 		}) =>
 			new Promise<void>((resolve, reject) => {
@@ -355,7 +362,9 @@ export function useTerminalLifecycle({
 					!isExitedRef.current &&
 					!connectionErrorRef.current;
 				if (canReuseAttachedSession && command) {
-					void writeWorkspaceRunCommand(command).then(resolve).catch(reject);
+					void writeWorkspaceRunCommands(command.commands)
+						.then(resolve)
+						.catch(reject);
 					return;
 				}
 				isExitedRef.current = false;
@@ -379,6 +388,7 @@ export function useTerminalLifecycle({
 							rows: xterm.rows,
 							skipColdRestore: true,
 							allowKilled: true,
+							...(command ? { commands: command.commands } : {}),
 						},
 						{
 							onSuccess: (result) => {
@@ -390,29 +400,9 @@ export function useTerminalLifecycle({
 								syncBackendDimensions();
 								pendingInitialStateRef.current = result;
 								maybeApplyInitialState();
-								if (!command) {
-									resolve();
-									return;
-								}
-								void writeWorkspaceRunCommand(command)
-									.then(resolve)
-									.catch((error) => {
-										console.error(
-											"[Terminal] Failed to write workspace run command:",
-											error,
-										);
-										if (workspaceRun) {
-											setPaneWorkspaceRunState(paneId, "stopped-by-exit");
-										}
-										setConnectionError(
-											error instanceof Error
-												? error.message
-												: "Failed to write workspace run command",
-										);
-										isStreamReadyRef.current = true;
-										flushPendingEvents();
-										reject(error);
-									});
+								// Commands are passed into createOrAttach so the session
+								// shell chains them; no post-attach write needed.
+								resolve();
 							},
 							onError: (error) => {
 								if (activeAttachRequestId !== requestId) {
@@ -545,7 +535,9 @@ export function useTerminalLifecycle({
 				paneId,
 				priority: isFocusedRef.current ? 0 : 1,
 				run: (done) => {
-					const startAttach = (commandToRunAfterAttach?: string) => {
+					const startAttach = (
+						commandToRunAfterAttach?: WorkspaceRunRestartCommand,
+					) => {
 						if (attachCanceled) return;
 						if (attachInFlightByPane.has(paneId)) {
 							cancelAttachWait = waitForAttachClear(paneId, () => {
@@ -586,6 +578,9 @@ export function useTerminalLifecycle({
 								...((isNewWorkspaceRun || Boolean(commandToRunAfterAttach)) && {
 									skipColdRestore: true,
 								}),
+								...(commandToRunAfterAttach
+									? { commands: commandToRunAfterAttach.commands }
+									: {}),
 							},
 							{
 								onSuccess: (result) => {
@@ -635,29 +630,8 @@ export function useTerminalLifecycle({
 
 									pendingInitialStateRef.current = result;
 									maybeApplyInitialState();
-
-									if (!commandToRunAfterAttach) {
-										return;
-									}
-
-									void writeWorkspaceRunCommand(commandToRunAfterAttach).catch(
-										(error) => {
-											console.error(
-												"[Terminal] Failed to write workspace run command after attach:",
-												error,
-											);
-											if (paneWorkspaceRun) {
-												setPaneWorkspaceRunState(paneId, "stopped-by-exit");
-											}
-											setConnectionError(
-												error instanceof Error
-													? error.message
-													: "Failed to write workspace run command",
-											);
-											isStreamReadyRef.current = true;
-											flushPendingEvents();
-										},
-									);
+									// Restart/replay commands are handed to createOrAttach as a
+									// shell-aware command array; no post-attach write.
 								},
 								onError: (error) => {
 									if (!isAttachActive()) return;

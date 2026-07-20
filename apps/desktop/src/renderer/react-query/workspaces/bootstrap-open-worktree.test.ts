@@ -13,7 +13,7 @@ describe("bootstrapOpenWorktree", () => {
 	});
 
 	it("returns create_or_attach_failed when createOrAttach fails", async () => {
-		const writeToTerminal = mock(async () => ({}));
+		const writeCommandsToTerminal = mock(async () => ({}));
 
 		const error = await bootstrapOpenWorktree({
 			data: {
@@ -25,11 +25,11 @@ describe("bootstrapOpenWorktree", () => {
 			createOrAttach: async () => {
 				throw new Error("attach failed");
 			},
-			writeToTerminal,
+			writeCommandsToTerminal,
 		});
 
 		expect(error).toBe("create_or_attach_failed");
-		expect(writeToTerminal).not.toHaveBeenCalled();
+		expect(writeCommandsToTerminal).not.toHaveBeenCalled();
 	});
 
 	it("returns write_initial_commands_failed when write fails", async () => {
@@ -41,7 +41,7 @@ describe("bootstrapOpenWorktree", () => {
 			addTab: () => ({ tabId: "tab-1", paneId: "pane-1" }),
 			setTabAutoTitle: mock(() => {}),
 			createOrAttach: async () => ({}),
-			writeToTerminal: async () => {
+			writeCommandsToTerminal: async () => {
 				throw new Error("write failed");
 			},
 		});
@@ -51,17 +51,17 @@ describe("bootstrapOpenWorktree", () => {
 
 	it("returns null when setup command writes successfully", async () => {
 		const createOrAttach = mock(async () => ({}));
-		const writeToTerminal = mock(async () => ({}));
+		const writeCommandsToTerminal = mock(async () => ({}));
 
 		const error = await bootstrapOpenWorktree({
 			data: {
 				workspace: { id: "ws-1" },
-				initialCommands: ["echo setup"],
+				initialCommands: ["echo setup", "echo more"],
 			},
 			addTab: () => ({ tabId: "tab-1", paneId: "pane-1" }),
 			setTabAutoTitle: mock(() => {}),
 			createOrAttach,
-			writeToTerminal,
+			writeCommandsToTerminal,
 		});
 
 		expect(error).toBeNull();
@@ -71,15 +71,16 @@ describe("bootstrapOpenWorktree", () => {
 			workspaceId: "ws-1",
 			joinPending: true,
 		});
-		expect(writeToTerminal).toHaveBeenCalledWith({
+		expect(writeCommandsToTerminal).toHaveBeenCalledWith({
 			paneId: "pane-1",
-			data: "echo setup\n",
+			commands: ["echo setup", "echo more"],
 			throwOnError: true,
 		});
 	});
 
 	it("returns null when there are no initial commands", async () => {
-		const writeToTerminal = mock(async () => ({}));
+		const writeCommandsToTerminal = mock(async () => ({}));
+		const createOrAttach = mock(async () => ({}));
 
 		const error = await bootstrapOpenWorktree({
 			data: {
@@ -88,11 +89,12 @@ describe("bootstrapOpenWorktree", () => {
 			},
 			addTab: () => ({ tabId: "tab-1", paneId: "pane-1" }),
 			setTabAutoTitle: mock(() => {}),
-			createOrAttach: async () => ({}),
-			writeToTerminal,
+			createOrAttach,
+			writeCommandsToTerminal,
 		});
 
 		expect(error).toBeNull();
-		expect(writeToTerminal).not.toHaveBeenCalled();
+		expect(createOrAttach).toHaveBeenCalled();
+		expect(writeCommandsToTerminal).not.toHaveBeenCalled();
 	});
 });

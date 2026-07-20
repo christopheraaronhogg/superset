@@ -122,5 +122,5 @@ export function getVibeWrapperScript(): string {
 }
 
 export function createVibeWrapper(): void {
-	createWrapper("vibe", getVibeWrapperScript());
+	createWrapper("vibe", getVibeWrapperScript(), { agentId: "vibe" });
 }

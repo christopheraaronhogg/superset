@@ -27,7 +27,8 @@ const ORIGINAL_SHELL = process.env.SHELL;
 const ORIGINAL_PATH = process.env.PATH;
 const ORIGINAL_HOME = process.env.HOME;
 
-const { runTeardown } = await import("./teardown");
+const { buildTeardownCommand, resolveTeardownShell, runTeardown } =
+	await import("./teardown");
 
 describe("runTeardown", () => {
 	beforeEach(() => {
@@ -324,5 +325,35 @@ echo wrapper
 		expect(result.success).toBe(true);
 		expect(existsSync(markerFile)).toBe(true);
 		expect(readFileSync(markerFile, "utf-8").trim()).toBe("wrapper");
+	});
+});
+
+describe("Windows teardown shell helpers", () => {
+	test("resolveTeardownShell prefers COMSPEC on Windows", () => {
+		expect(
+			resolveTeardownShell("win32", {
+				COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+			}),
+		).toBe("C:\\Windows\\System32\\cmd.exe");
+	});
+
+	test("buildTeardownCommand short-circuits on PowerShell", () => {
+		expect(
+			buildTeardownCommand(
+				["docker compose down", "rm -r .cache"],
+				"powershell.exe",
+				"win32",
+			),
+		).toContain("if (-not $?)");
+	});
+
+	test("buildTeardownCommand uses && for cmd.exe", () => {
+		expect(
+			buildTeardownCommand(
+				["docker compose down", "rm -r .cache"],
+				"cmd.exe",
+				"win32",
+			),
+		).toBe("docker compose down && rm -r .cache");
 	});
 });

@@ -10,10 +10,12 @@ import {
 	loadSetupConfig,
 	resolveScript,
 	type SetupConfig,
-	shellSingleQuote,
 } from "../../../runtime/setup/config";
+import { getTerminalBaseEnv } from "../../../terminal/env";
+import { resolveLaunchShell } from "../../../terminal/shell-launch";
 import type { HostServiceContext } from "../../../types";
 import { protectedProcedure, router } from "../../index";
+import { buildSetupScriptCommand } from "../workspace-creation/shared/setup-terminal";
 
 const projectIdInput = z.object({ projectId: z.string().uuid() });
 
@@ -33,6 +35,59 @@ function requireProject(
 		});
 	}
 	return { id: row.id, repoPath: row.repoPath };
+}
+
+/**
+ * Resolve workspace run as a command array for terminal launch (v1 + v2).
+ *
+ * Configured `run: []` commands are returned as-is. Discovered scripts use the
+ * same shell/platform-aware invocation as setup/teardown so Windows extensions
+ * (`.ts`/`.cmd`/`.bat`/`.ps1`/`.sh`) are not forced through POSIX `bash '…'`.
+ *
+ * Exported for tests so platform/shell can be forced without mocking process.
+ */
+export function resolveWorkspaceRunDefinition(args: {
+	repoPath: string;
+	projectId: string;
+	/** Override $HOME for tests. */
+	homeDir?: string;
+	shell?: string;
+	platform?: NodeJS.Platform;
+}): {
+	source: "project-config";
+	projectId: string;
+	commands: string[];
+	cwd?: string;
+} | null {
+	const platform = args.platform ?? process.platform;
+	const resolved = resolveScript("run", {
+		repoPath: args.repoPath,
+		projectId: args.projectId,
+		...(args.homeDir !== undefined && { homeDir: args.homeDir }),
+		platform,
+	});
+	if (!resolved) return null;
+
+	const commands =
+		resolved.kind === "commands"
+			? resolved.commands
+			: [buildSetupScriptCommand(resolved.scriptPath, args.shell, platform)];
+
+	return {
+		source: "project-config" as const,
+		projectId: args.projectId,
+		commands,
+		...(resolved.cwd && { cwd: resolved.cwd }),
+	};
+}
+
+/** Same launch-shell source as setup/teardown terminal sessions. */
+function resolveRunShell(): string | undefined {
+	try {
+		return resolveLaunchShell(getTerminalBaseEnv());
+	} catch {
+		return undefined;
+	}
 }
 
 export const configRouter = router({
@@ -132,19 +187,13 @@ export const configRouter = router({
 		.input(projectIdInput)
 		.query(({ ctx, input }) => {
 			const project = requireProject(ctx, input.projectId);
-			const resolved = resolveScript("run", {
+			// Explicit platform + launch shell (same source as setup/teardown) so
+			// discovered run.* scripts are never forced through POSIX bash quotes.
+			return resolveWorkspaceRunDefinition({
 				repoPath: project.repoPath,
 				projectId: project.id,
+				platform: process.platform,
+				shell: resolveRunShell(),
 			});
-			if (!resolved) return null;
-			return {
-				source: "project-config" as const,
-				projectId: project.id,
-				commands:
-					resolved.kind === "commands"
-						? resolved.commands
-						: [`bash ${shellSingleQuote(resolved.scriptPath)}`],
-				...(resolved.cwd && { cwd: resolved.cwd }),
-			};
 		}),
 });

@@ -2,6 +2,7 @@ import { describe, expect, it, mock } from "bun:test";
 import {
 	buildTerminalCommand,
 	launchCommandInPane,
+	launchCommandsInPane,
 	writeCommandsInPane,
 } from "./launch-command";
 import {
@@ -132,11 +133,90 @@ describe("launchCommandInPane", () => {
 	});
 });
 
+describe("launchCommandsInPane", () => {
+	it("creates a terminal session and writes command arrays through the backend", async () => {
+		const createOrAttach = mock(async () => ({}));
+		const writeCommands = mock(async () => ({}));
+
+		await launchCommandsInPane({
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+			commands: ["echo one", "echo two"],
+			cwd: "./apps/desktop",
+			createOrAttach,
+			writeCommands,
+		});
+
+		expect(createOrAttach).toHaveBeenCalledWith({
+			paneId: "pane-1",
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+			cwd: "./apps/desktop",
+			joinPending: true,
+		});
+		expect(writeCommands).toHaveBeenCalledWith({
+			paneId: "pane-1",
+			commands: ["echo one", "echo two"],
+			throwOnError: true,
+		});
+	});
+
+	it("waits for mounted sessions and applies cwd through the command writer", async () => {
+		const paneId = "pane-mounted-commands-ready";
+		const createOrAttach = mock(async () => ({}));
+		const writeCommands = mock(async () => ({}));
+
+		const launchPromise = launchCommandsInPane({
+			paneId,
+			tabId: "tab-1",
+			workspaceId: "ws-1",
+			commands: ["echo one", "echo two"],
+			cwd: "./apps/desktop",
+			createOrAttach,
+			writeCommands,
+			waitForMountedSession: true,
+		});
+
+		expect(createOrAttach).not.toHaveBeenCalled();
+		expect(writeCommands).not.toHaveBeenCalled();
+
+		markTerminalSessionReady(paneId);
+		await launchPromise;
+		clearTerminalSessionReady(paneId);
+
+		expect(writeCommands).toHaveBeenCalledWith({
+			paneId,
+			commands: ["echo one", "echo two"],
+			cwd: "./apps/desktop",
+			throwOnError: true,
+		});
+	});
+});
+
 describe("buildTerminalCommand", () => {
 	it("joins commands with shell separators", () => {
 		expect(buildTerminalCommand(["echo one", "echo two"])).toBe(
 			"echo one && echo two",
 		);
+	});
+
+	it("joins commands with PowerShell-compatible conditional separators", () => {
+		expect(
+			buildTerminalCommand(["echo one", "echo two"], {
+				platform: "win32",
+				shell: "powershell.exe",
+			}),
+		).toBe("echo one; if ($?) { echo two }");
+	});
+
+	it("joins commands with cmd.exe && short-circuit on Windows", () => {
+		expect(
+			buildTerminalCommand(["echo one", "echo two"], {
+				platform: "win32",
+				shell: "cmd.exe",
+			}),
+		).toBe("echo one && echo two");
 	});
 
 	it("returns null for empty commands", () => {
@@ -159,6 +239,24 @@ describe("writeCommandsInPane", () => {
 		expect(write).toHaveBeenCalledWith({
 			paneId: "pane-1",
 			data: "echo one && echo two\n",
+			throwOnError: true,
+		});
+	});
+
+	it("joins with PowerShell when shell is provided", async () => {
+		const write = mock(async () => ({}));
+
+		await writeCommandsInPane({
+			paneId: "pane-1",
+			commands: ["echo one", "echo two"],
+			write,
+			shell: "powershell.exe",
+			platform: "win32",
+		});
+
+		expect(write).toHaveBeenCalledWith({
+			paneId: "pane-1",
+			data: "echo one; if ($?) { echo two }\n",
 			throwOnError: true,
 		});
 	});

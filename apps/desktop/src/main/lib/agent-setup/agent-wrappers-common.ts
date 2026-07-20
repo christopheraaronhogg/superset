@@ -17,7 +17,14 @@ export const MANAGED_NOTIFY_RELATIVE_PATH = `hooks/${NOTIFY_SCRIPT_NAME}`;
  * payload carries wrapper-level identity even when the agent is launched outside
  * the Superset wrapper (system PATH resolves the real binary directly).
  */
-export function getManagedNotifyHookCommand(agentId: string): string {
+export function getManagedNotifyHookCommand(
+	agentId: string,
+	platform: NodeJS.Platform = process.platform,
+): string {
+	if (platform === "win32") {
+		// Windows agent hooks run via cmd; prefer the .cmd dispatcher written by notify-hook.
+		return `if defined SUPERSET_HOME_DIR if exist "%SUPERSET_HOME_DIR%\\hooks\\notify.cmd" (set "SUPERSET_AGENT_ID=${agentId}" & call "%SUPERSET_HOME_DIR%\\hooks\\notify.cmd")`;
+	}
 	return `[ -n "$SUPERSET_HOME_DIR" ] && [ -x "$SUPERSET_HOME_DIR/${MANAGED_NOTIFY_RELATIVE_PATH}" ] && SUPERSET_AGENT_ID=${agentId} "$SUPERSET_HOME_DIR/${MANAGED_NOTIFY_RELATIVE_PATH}" || true`;
 }
 
@@ -124,6 +131,10 @@ export function getWrapperPath(binaryName: string): string {
 	return path.join(BIN_DIR, binaryName);
 }
 
+export function getWindowsWrapperPath(binaryName: string): string {
+	return path.join(BIN_DIR, `${binaryName}.cmd`);
+}
+
 export interface BuildWrapperScriptOptions {
 	/**
 	 * `BuiltinAgentId` for the wrapped binary (e.g. "claude", "codex"). When
@@ -132,6 +143,20 @@ export interface BuildWrapperScriptOptions {
 	 * notify-hook script forwards this into the v2 hook payload.
 	 */
 	agentId?: string;
+}
+
+function quoteCmdSetValue(value: string): string {
+	return value.replaceAll('"', '""').replaceAll("\r", "").replaceAll("\n", "");
+}
+
+export function buildWindowsWrapperScript(
+	binaryName: string,
+	options: BuildWrapperScriptOptions = {},
+): string {
+	const agentEnv = options.agentId
+		? `set "SUPERSET_AGENT_ID=${quoteCmdSetValue(options.agentId)}"\r\n`
+		: "";
+	return `@echo off\r\nrem ${WRAPPER_MARKER}\r\nsetlocal EnableExtensions EnableDelayedExpansion\r\nset "_superset_bin_dir=%~dp0"\r\nif "!_superset_bin_dir:~-1!"=="\\" set "_superset_bin_dir=!_superset_bin_dir:~0,-1!"\r\n${agentEnv}for %%D in ("%PATH:;=" "%") do (\r\n  if not "%%~fD"=="" if /I not "%%~fD"=="!_superset_bin_dir!" (\r\n    for %%E in (.exe .cmd .bat .com) do (\r\n      if exist "%%~fD\\${binaryName}%%~E" if not exist "%%~fD\\${binaryName}%%~E\\" (\r\n        call "%%~fD\\${binaryName}%%~E" %*\r\n        exit /b !ERRORLEVEL!\r\n      )\r\n    )\r\n  )\r\n)\r\necho ${getMissingBinaryMessage(binaryName)} 1>&2\r\nexit /b 127\r\n`;
 }
 
 export function buildWrapperScript(
@@ -157,9 +182,28 @@ ${exportAgentId}${execLine}
 `;
 }
 
-export function createWrapper(binaryName: string, script: string): void {
-	const changed = writeFileIfChanged(getWrapperPath(binaryName), script, 0o755);
+export interface CreateWrapperOptions extends BuildWrapperScriptOptions {
+	platform?: NodeJS.Platform;
+}
+
+export function createWrapper(
+	binaryName: string,
+	script: string,
+	options: CreateWrapperOptions = {},
+): void {
+	const platform = options.platform ?? process.platform;
+	const unixWrapperPath = getWrapperPath(binaryName);
+	fs.mkdirSync(path.dirname(unixWrapperPath), { recursive: true });
+	const changed = writeFileIfChanged(unixWrapperPath, script, 0o755);
+	const changedWindows =
+		platform === "win32"
+			? writeFileIfChanged(
+					getWindowsWrapperPath(binaryName),
+					buildWindowsWrapperScript(binaryName, options),
+					0o644,
+				)
+			: false;
 	console.log(
-		`[agent-setup] ${changed ? "Updated" : "Verified"} ${binaryName} wrapper`,
+		`[agent-setup] ${changed || changedWindows ? "Updated" : "Verified"} ${binaryName} wrapper`,
 	);
 }

@@ -263,8 +263,10 @@ export type ResolvedScript =
  *
  *   1. Configured commands via {@link loadSetupConfig} — worktree config
  *      overrides the main repo's when `worktreePath` is in scope.
- *   2. Fallback: `.superset/<key>.sh`, worktree first (when in scope), then
- *      the main repo — gitignored scripts only exist in the main repo.
+ *   2. Fallback: platform-native scripts under `.superset/` (worktree first
+ *      when in scope, then the main repo — gitignored scripts only exist in
+ *      the main repo). On Windows that includes `.ts` / `.cmd` / `.bat` /
+ *      `.ps1` then `.sh`; elsewhere `.sh` then portable `.ts`.
  *
  * Setup and teardown pass their worktree; `run` resolves per project, where
  * no single worktree exists, so it uses the main repo only.
@@ -281,6 +283,7 @@ export function resolveScript(
 		worktreePath?: string;
 		/** Override $HOME for tests. Defaults to `os.homedir()`. */
 		homeDir?: string;
+		platform?: NodeJS.Platform;
 	},
 ): ResolvedScript | null {
 	const config = loadSetupConfig(args);
@@ -290,16 +293,40 @@ export function resolveScript(
 		return { kind: "commands", commands, ...(cwd && { cwd }) };
 	}
 
+	const platform = args.platform ?? process.platform;
 	const roots = args.worktreePath
 		? [args.worktreePath, args.repoPath]
 		: [args.repoPath];
 	for (const root of roots) {
-		const scriptPath = join(root, PROJECT_SUPERSET_DIR_NAME, `${key}.sh`);
-		if (existsSync(scriptPath)) {
+		const scriptPath = resolveLifecycleScriptPath(root, key, platform);
+		if (scriptPath) {
 			return { kind: "script", scriptPath, ...(cwd && { cwd }) };
 		}
 	}
 
+	return null;
+}
+
+/** Candidate basenames for a lifecycle script, ordered by preference. */
+export function lifecycleScriptBasenames(
+	key: ScriptKey,
+	platform: NodeJS.Platform = process.platform,
+): string[] {
+	if (platform === "win32") {
+		return [`${key}.ts`, `${key}.cmd`, `${key}.bat`, `${key}.ps1`, `${key}.sh`];
+	}
+	return [`${key}.sh`, `${key}.ts`];
+}
+
+export function resolveLifecycleScriptPath(
+	root: string,
+	key: ScriptKey,
+	platform: NodeJS.Platform = process.platform,
+): string | null {
+	for (const basename of lifecycleScriptBasenames(key, platform)) {
+		const scriptPath = join(root, PROJECT_SUPERSET_DIR_NAME, basename);
+		if (existsSync(scriptPath)) return scriptPath;
+	}
 	return null;
 }
 

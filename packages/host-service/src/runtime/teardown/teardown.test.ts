@@ -45,6 +45,55 @@ describe("teardown initial command", () => {
 		);
 	});
 
+	test("cmd.exe teardown scripts short-circuit on Windows", () => {
+		const command = buildTeardownInitialCommand(
+			String.raw`C:\wt\.superset\teardown.cmd`,
+			"cmd.exe",
+			"win32",
+		);
+		expect(command).toBe(
+			String.raw`"C:\wt\.superset\teardown.cmd" && exit /b 0 || exit /b 1`,
+		);
+	});
+
+	test("cmd.exe runs Windows teardown.sh via Git Bash with double-quote paths (spaces)", () => {
+		const command = buildTeardownInitialCommand(
+			String.raw`C:\Users\me\My Project\.superset\teardown.sh`,
+			"cmd.exe",
+			"win32",
+		);
+		expect(command).toBe(
+			String.raw`bash "C:\Users\me\My Project\.superset\teardown.sh" && exit /b 0 || exit /b 1`,
+		);
+		// Neither POSIX `exec` nor single-quote path form — both break in cmd.exe.
+		expect(command).not.toContain("exec bash");
+		expect(command).not.toContain("'C:");
+		expect(command).not.toMatch(/^bash '/);
+	});
+
+	test("PowerShell 5.1 runs Windows teardown.sh via Git Bash with single-quote paths (spaces)", () => {
+		const command = buildTeardownInitialCommand(
+			String.raw`C:\Users\me\My Project\.superset\teardown.sh`,
+			"powershell.exe",
+			"win32",
+		);
+		expect(command).toBe(
+			String.raw`bash 'C:\Users\me\My Project\.superset\teardown.sh'; exit $LASTEXITCODE`,
+		);
+		expect(command).not.toContain("exec bash");
+		expect(command).not.toMatch(/bash "/);
+	});
+
+	test("PowerShell teardown command chains short-circuit on Windows", () => {
+		const command = buildTeardownCommandFromShell(
+			"docker compose down; if (-not $?) { if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; exit 1 }; rm -r .cache",
+			"powershell.exe",
+			"win32",
+		);
+		expect(command).toContain("exit $LASTEXITCODE");
+		expect(command).not.toContain("bash -c");
+	});
+
 	test("exits fish with the teardown script status", () => {
 		if (!isFishAvailable()) return;
 
@@ -232,6 +281,53 @@ describe("resolveTeardownCommand", () => {
 			});
 
 			expect(resolved).toBeNull();
+		} finally {
+			sb.cleanup();
+		}
+	});
+
+	test("discovers Windows teardown.cmd fallback without bash", () => {
+		const sb = makeSandbox();
+		try {
+			const scriptPath = join(sb.repoPath, ".superset", "teardown.cmd");
+			writeFileSync(scriptPath, "@echo off\r\n");
+
+			const resolved = resolveTeardownCommand({
+				repoPath: sb.repoPath,
+				projectId: "proj-1",
+				worktreePath: join(sb.repoPath, ".worktrees", "feature"),
+				homeDir: sb.homeDir,
+				platform: "win32",
+				shell: "cmd.exe",
+			});
+
+			expect(resolved?.initialCommand).toContain(scriptPath);
+			expect(resolved?.initialCommand).not.toContain("exec bash");
+			expect(resolved?.initialCommand).toContain("exit /b");
+		} finally {
+			sb.cleanup();
+		}
+	});
+
+	test("chains PowerShell teardown commands without && (PS 5.1)", () => {
+		const sb = makeSandbox();
+		try {
+			writeConfig(sb.repoPath, {
+				teardown: ["docker compose down", "rm -rf .cache"],
+			});
+
+			const resolved = resolveTeardownCommand({
+				repoPath: sb.repoPath,
+				projectId: "proj-1",
+				worktreePath: join(sb.repoPath, ".worktrees", "feature"),
+				homeDir: sb.homeDir,
+				platform: "win32",
+				shell: "powershell.exe",
+			});
+
+			expect(resolved?.initialCommand).not.toContain(" && ");
+			expect(resolved?.initialCommand).toContain("if (-not $?)");
+			expect(resolved?.initialCommand).not.toContain("exec bash");
 		} finally {
 			sb.cleanup();
 		}

@@ -14,7 +14,7 @@ import { drizzle } from "drizzle-orm/bun-sqlite";
 import { migrate } from "drizzle-orm/bun-sqlite/migrator";
 import * as schema from "../../../db/schema";
 import type { HostServiceContext } from "../../../types";
-import { configRouter } from "./config";
+import { configRouter, resolveWorkspaceRunDefinition } from "./config";
 
 const MIGRATIONS_FOLDER = resolve(import.meta.dir, "../../../../drizzle");
 // Valid v4 UUID — zod's .uuid() rejects all-1s.
@@ -319,5 +319,292 @@ describe("configRouter", () => {
 				cwd: "apps/web",
 			});
 		});
+
+		it("POSIX script fallback uses bash single-quote form", () => {
+			const dir = join(sandbox.repoPath, ".superset");
+			mkdirSync(dir, { recursive: true });
+			const scriptPath = join(dir, "run.sh");
+			writeFileSync(scriptPath, "#!/usr/bin/env bash\n", "utf-8");
+
+			expect(
+				resolveWorkspaceRunDefinition({
+					repoPath: sandbox.repoPath,
+					projectId: PROJECT_ID,
+					platform: "darwin",
+					shell: "/bin/zsh",
+				}),
+			).toEqual({
+				source: "project-config",
+				projectId: PROJECT_ID,
+				commands: [`bash '${scriptPath}'`],
+			});
+		});
+
+		it("preserves configured run command array without joining", () => {
+			const dir = join(sandbox.repoPath, ".superset");
+			mkdirSync(dir, { recursive: true });
+			writeFileSync(
+				join(dir, "config.json"),
+				JSON.stringify({ run: ["echo a", "bun dev"] }),
+				"utf-8",
+			);
+
+			expect(
+				resolveWorkspaceRunDefinition({
+					repoPath: sandbox.repoPath,
+					projectId: PROJECT_ID,
+					platform: "win32",
+					shell: "cmd.exe",
+				}),
+			).toEqual({
+				source: "project-config",
+				projectId: PROJECT_ID,
+				commands: ["echo a", "bun dev"],
+			});
+		});
+	});
+});
+
+describe("resolveWorkspaceRunDefinition Windows script invocation", () => {
+	let sandbox: Sandbox;
+
+	beforeEach(() => {
+		sandbox = createRepo();
+	});
+
+	afterEach(() => {
+		sandbox.cleanup();
+	});
+
+	function writeRunScript(basename: string, body = "echo hi\r\n"): string {
+		// Path with spaces so quoting regressions surface in expectations.
+		const root = join(sandbox.repoPath, "My Project");
+		const dir = join(root, ".superset");
+		mkdirSync(dir, { recursive: true });
+		const scriptPath = join(dir, basename);
+		writeFileSync(scriptPath, body, "utf-8");
+		return scriptPath;
+	}
+
+	function resolveWindows(shell: string, scriptBasename: string) {
+		const scriptPath = writeRunScript(scriptBasename);
+		const definition = resolveWorkspaceRunDefinition({
+			repoPath: join(sandbox.repoPath, "My Project"),
+			projectId: PROJECT_ID,
+			platform: "win32",
+			shell,
+		});
+		return { scriptPath, definition };
+	}
+
+	describe("cmd.exe", () => {
+		it("runs .ts via bun with double-quoted paths (spaces)", () => {
+			const { scriptPath, definition } = resolveWindows("cmd.exe", "run.ts");
+			expect(definition).toEqual({
+				source: "project-config",
+				projectId: PROJECT_ID,
+				commands: [`bun "${scriptPath}" && exit /b 0 || exit /b 1`],
+			});
+			expect(definition?.commands[0]).not.toMatch(/^bash '/);
+		});
+
+		it("runs .cmd natively without bash", () => {
+			const { scriptPath, definition } = resolveWindows("cmd.exe", "run.cmd");
+			expect(definition).toEqual({
+				source: "project-config",
+				projectId: PROJECT_ID,
+				commands: [`"${scriptPath}" && exit /b 0 || exit /b 1`],
+			});
+			expect(definition?.commands[0]).not.toContain("bash");
+		});
+
+		it("runs .bat natively without bash", () => {
+			const { scriptPath, definition } = resolveWindows("cmd.exe", "run.bat");
+			expect(definition).toEqual({
+				source: "project-config",
+				projectId: PROJECT_ID,
+				commands: [`"${scriptPath}" && exit /b 0 || exit /b 1`],
+			});
+			expect(definition?.commands[0]).not.toContain("bash");
+		});
+
+		it("runs .ps1 through powershell.exe -File with double-quoted paths", () => {
+			const { scriptPath, definition } = resolveWindows("cmd.exe", "run.ps1");
+			expect(definition).toEqual({
+				source: "project-config",
+				projectId: PROJECT_ID,
+				commands: [
+					`powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${scriptPath}" && exit /b 0 || exit /b 1`,
+				],
+			});
+			expect(definition?.commands[0]).not.toMatch(/^bash '/);
+		});
+
+		it("runs .sh via Git Bash with double-quoted paths (spaces)", () => {
+			const { scriptPath, definition } = resolveWindows("cmd.exe", "run.sh");
+			expect(definition).toEqual({
+				source: "project-config",
+				projectId: PROJECT_ID,
+				commands: [`bash "${scriptPath}" && exit /b 0 || exit /b 1`],
+			});
+			// POSIX single quotes are not quoting in cmd.exe.
+			expect(definition?.commands[0]).not.toContain("'");
+			expect(definition?.commands[0]).not.toMatch(/^bash '/);
+		});
+	});
+
+	describe("Windows PowerShell 5.1", () => {
+		it("runs .ts via bun with single-quoted paths (spaces)", () => {
+			const { scriptPath, definition } = resolveWindows(
+				"powershell.exe",
+				"run.ts",
+			);
+			expect(definition).toEqual({
+				source: "project-config",
+				projectId: PROJECT_ID,
+				commands: [`bun '${scriptPath}'; if (-not $?) { exit 1 }`],
+			});
+			expect(definition?.commands[0]).not.toMatch(/^bash '/);
+		});
+
+		it("runs .cmd through cmd.exe /d /s /c without bare bash", () => {
+			const { scriptPath, definition } = resolveWindows(
+				"powershell.exe",
+				"run.cmd",
+			);
+			expect(definition).toEqual({
+				source: "project-config",
+				projectId: PROJECT_ID,
+				commands: [
+					`cmd.exe /d /s /c '"${scriptPath}"'; if (-not $?) { exit 1 }`,
+				],
+			});
+			expect(definition?.commands[0]).not.toMatch(/\bbash\b/);
+		});
+
+		it("runs .bat through cmd.exe /d /s /c without bare bash", () => {
+			const { scriptPath, definition } = resolveWindows(
+				"powershell.exe",
+				"run.bat",
+			);
+			expect(definition).toEqual({
+				source: "project-config",
+				projectId: PROJECT_ID,
+				commands: [
+					`cmd.exe /d /s /c '"${scriptPath}"'; if (-not $?) { exit 1 }`,
+				],
+			});
+			expect(definition?.commands[0]).not.toMatch(/\bbash\b/);
+		});
+
+		it("runs .ps1 through powershell.exe -File with single-quoted paths", () => {
+			const { scriptPath, definition } = resolveWindows(
+				"powershell.exe",
+				"run.ps1",
+			);
+			expect(definition).toEqual({
+				source: "project-config",
+				projectId: PROJECT_ID,
+				commands: [
+					`powershell.exe -NoProfile -ExecutionPolicy Bypass -File '${scriptPath}'; if (-not $?) { exit 1 }`,
+				],
+			});
+			expect(definition?.commands[0]).not.toMatch(/^bash '/);
+		});
+
+		it("runs .sh via Git Bash with single-quoted paths (spaces)", () => {
+			const { scriptPath, definition } = resolveWindows(
+				"powershell.exe",
+				"run.sh",
+			);
+			expect(definition).toEqual({
+				source: "project-config",
+				projectId: PROJECT_ID,
+				commands: [`bash '${scriptPath}'; if (-not $?) { exit 1 }`],
+			});
+			expect(definition?.commands[0]).not.toMatch(/bash "/);
+			expect(definition?.commands[0]).not.toContain("exec bash");
+		});
+	});
+
+	it("prefers run.ts over lower-priority Windows fallbacks", () => {
+		const root = join(sandbox.repoPath, "My Project");
+		const dir = join(root, ".superset");
+		mkdirSync(dir, { recursive: true });
+		const tsPath = join(dir, "run.ts");
+		const cmdPath = join(dir, "run.cmd");
+		writeFileSync(tsPath, "export {}", "utf-8");
+		writeFileSync(cmdPath, "@echo off\r\n", "utf-8");
+
+		const definition = resolveWorkspaceRunDefinition({
+			repoPath: root,
+			projectId: PROJECT_ID,
+			platform: "win32",
+			shell: "cmd.exe",
+		});
+		expect(definition?.commands[0]).toContain("bun ");
+		expect(definition?.commands[0]).toContain(tsPath);
+		expect(definition?.commands[0]).not.toContain(cmdPath);
+	});
+
+	it("threads platform into script discovery instead of relying on the host OS", () => {
+		// Only a Windows-native run.cmd exists. On a macOS CI host, process.platform
+		// would never find it — the router path must force platform into resolveScript.
+		const root = join(sandbox.repoPath, "My Project");
+		const dir = join(root, ".superset");
+		mkdirSync(dir, { recursive: true });
+		const cmdPath = join(dir, "run.cmd");
+		writeFileSync(cmdPath, "@echo off\r\n", "utf-8");
+
+		expect(
+			resolveWorkspaceRunDefinition({
+				repoPath: root,
+				projectId: PROJECT_ID,
+				platform: "darwin",
+				shell: "/bin/zsh",
+			}),
+		).toBeNull();
+
+		const winDef = resolveWorkspaceRunDefinition({
+			repoPath: root,
+			projectId: PROJECT_ID,
+			platform: "win32",
+			shell: "cmd.exe",
+		});
+		expect(winDef).toEqual({
+			source: "project-config",
+			projectId: PROJECT_ID,
+			commands: [`"${cmdPath}" && exit /b 0 || exit /b 1`],
+		});
+	});
+
+	it("threads shell into Windows quoting (cmd.exe vs PowerShell 5.1)", () => {
+		const root = join(sandbox.repoPath, "My Project");
+		const dir = join(root, ".superset");
+		mkdirSync(dir, { recursive: true });
+		const scriptPath = join(dir, "run.sh");
+		writeFileSync(scriptPath, "#!/usr/bin/env bash\n", "utf-8");
+
+		const cmdDef = resolveWorkspaceRunDefinition({
+			repoPath: root,
+			projectId: PROJECT_ID,
+			platform: "win32",
+			shell: "cmd.exe",
+		});
+		const psDef = resolveWorkspaceRunDefinition({
+			repoPath: root,
+			projectId: PROJECT_ID,
+			platform: "win32",
+			shell: "powershell.exe",
+		});
+
+		expect(cmdDef?.commands[0]).toBe(
+			`bash "${scriptPath}" && exit /b 0 || exit /b 1`,
+		);
+		expect(psDef?.commands[0]).toBe(
+			`bash '${scriptPath}'; if (-not $?) { exit 1 }`,
+		);
+		// Same host process.platform; only the shell arg changes quoting.
+		expect(cmdDef?.commands[0]).not.toEqual(psDef?.commands[0]);
 	});
 });

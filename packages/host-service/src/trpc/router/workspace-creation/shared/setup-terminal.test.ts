@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { resolveInitialCommand } from "./setup-terminal";
+import {
+	buildSetupScriptCommand,
+	resolveInitialCommand,
+} from "./setup-terminal";
 
 const PROJECT_ID = "11111111-1111-1111-1111-111111111111";
 
@@ -67,6 +70,85 @@ describe("resolveInitialCommand", () => {
 		expect(resolve()).toEqual({
 			initialCommand: "bun install && bun run db:migrate",
 		});
+	});
+
+	it("joins multi-line setup commands with PowerShell short-circuit on Windows", () => {
+		writeConfig(sandbox.repoPath, {
+			setup: ["bun install", "bun run db:migrate"],
+		});
+		expect(
+			resolveInitialCommand({
+				repoPath: sandbox.repoPath,
+				projectId: PROJECT_ID,
+				homeDir: sandbox.homeDir,
+				platform: "win32",
+				shell: "powershell.exe",
+			}),
+		).toEqual({
+			initialCommand:
+				"bun install; if (-not $?) { if ($LASTEXITCODE -is [int] -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; exit 1 }; bun run db:migrate",
+		});
+	});
+
+	it("joins multi-line setup commands with cmd.exe && on Windows", () => {
+		writeConfig(sandbox.repoPath, {
+			setup: ["bun install", "bun run db:migrate"],
+		});
+		expect(
+			resolveInitialCommand({
+				repoPath: sandbox.repoPath,
+				projectId: PROJECT_ID,
+				homeDir: sandbox.homeDir,
+				platform: "win32",
+				shell: "cmd.exe",
+			}),
+		).toEqual({
+			initialCommand: "bun install && bun run db:migrate",
+		});
+	});
+
+	it("discovers Windows setup.cmd fallback without bash", () => {
+		const dir = join(sandbox.repoPath, ".superset");
+		mkdirSync(dir, { recursive: true });
+		const scriptPath = join(dir, "setup.cmd");
+		writeFileSync(scriptPath, "@echo off\r\necho hi\r\n", "utf-8");
+
+		expect(
+			resolveInitialCommand({
+				repoPath: sandbox.repoPath,
+				projectId: PROJECT_ID,
+				homeDir: sandbox.homeDir,
+				platform: "win32",
+				shell: "cmd.exe",
+			}),
+		).toEqual({
+			initialCommand: `"${scriptPath}" && exit /b 0 || exit /b 1`,
+		});
+	});
+
+	it("runs Windows setup.sh via Git Bash with cmd.exe double-quote paths (spaces)", () => {
+		const scriptPath = String.raw`C:\Users\me\My Project\.superset\setup.sh`;
+		const command = buildSetupScriptCommand(scriptPath, "cmd.exe", "win32");
+		expect(command).toBe(
+			String.raw`bash "C:\Users\me\My Project\.superset\setup.sh" && exit /b 0 || exit /b 1`,
+		);
+		// Not POSIX single-quote form — cmd.exe would pass quotes as literals.
+		expect(command).not.toContain("'C:");
+		expect(command).not.toMatch(/^bash '/);
+	});
+
+	it("runs Windows setup.sh via Git Bash with PowerShell 5.1 single-quote paths (spaces)", () => {
+		const scriptPath = String.raw`C:\Users\me\My Project\.superset\setup.sh`;
+		const command = buildSetupScriptCommand(
+			scriptPath,
+			"powershell.exe",
+			"win32",
+		);
+		expect(command).toBe(
+			String.raw`bash 'C:\Users\me\My Project\.superset\setup.sh'; if (-not $?) { exit 1 }`,
+		);
+		expect(command).not.toContain("exec bash");
+		expect(command).not.toMatch(/bash "/);
 	});
 
 	it("returns the single command when setup has only one line", () => {

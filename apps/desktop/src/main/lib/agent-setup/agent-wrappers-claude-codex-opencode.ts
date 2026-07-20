@@ -280,20 +280,22 @@ export function createClaudeWrapper(): void {
 	const script = buildWrapperScript("claude", `exec "$REAL_BIN" "$@"`, {
 		agentId: "claude",
 	});
-	createWrapper("claude", script);
+	createWrapper("claude", script, { agentId: "claude" });
 }
 
 /**
  * Creates the Codex wrapper that injects Superset's notify/session-log logic.
  */
 export function createCodexWrapper(): void {
-	const notifyPath = getNotifyScriptPath();
+	// Codex wrapper is a POSIX shell script (Git Bash on Windows), so the
+	// notify path must be the .sh hook even when the host platform is win32.
+	const notifyPath = getNotifyScriptPath("linux");
 	const script = buildWrapperScript(
 		"codex",
 		buildCodexWrapperExecLine(notifyPath),
 		{ agentId: "codex" },
 	);
-	createWrapper("codex", script);
+	createWrapper("codex", script, { agentId: "codex" });
 }
 
 /**
@@ -443,7 +445,9 @@ export function getCodexGlobalHooksJsonContent(
  * lifecycle events.
  */
 export function createCodexHooksJson(): void {
-	const notifyScriptPath = getNotifyScriptPath();
+	// Codex runs hooks via /bin/sh -lc (Git Bash on Windows), so always use
+	// the POSIX notify.sh path even when the host platform is win32.
+	const notifyScriptPath = getNotifyScriptPath("linux");
 	const globalPath = getCodexGlobalHooksJsonPath();
 	const content = getCodexGlobalHooksJsonContent(notifyScriptPath);
 	if (content === null) return;
@@ -503,5 +507,5 @@ export function createOpenCodeWrapper(): void {
 		`export OPENCODE_CONFIG_DIR="${OPENCODE_CONFIG_DIR}"\nexec "$REAL_BIN" "$@"`,
 		{ agentId: "opencode" },
 	);
-	createWrapper("opencode", script);
+	createWrapper("opencode", script, { agentId: "opencode" });
 }

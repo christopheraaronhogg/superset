@@ -1,7 +1,6 @@
 import {
-	buildTerminalCommand,
 	ensureTerminalAttached,
-	writeCommandInPane,
+	launchCommandsInPane,
 } from "renderer/lib/terminal/launch-command";
 
 interface OpenWorkspaceData {
@@ -23,9 +22,10 @@ interface BootstrapOpenWorktreeOptions {
 		workspaceId: string;
 		joinPending?: boolean;
 	}) => Promise<unknown>;
-	writeToTerminal: (input: {
+	writeCommandsToTerminal: (input: {
 		paneId: string;
-		data: string;
+		commands: string[];
+		cwd?: string;
 		throwOnError?: boolean;
 	}) => Promise<unknown>;
 }
@@ -33,37 +33,57 @@ interface BootstrapOpenWorktreeOptions {
 export async function bootstrapOpenWorktree(
 	options: BootstrapOpenWorktreeOptions,
 ): Promise<BootstrapOpenWorktreeError | null> {
-	const setupCommand = buildTerminalCommand(options.data.initialCommands);
+	const initialCommands = (options.data.initialCommands ?? []).filter(
+		(command) => command.trim().length > 0,
+	);
 
 	const { tabId, paneId } = options.addTab(options.data.workspace.id);
-	if (setupCommand) {
+	if (initialCommands.length > 0) {
 		options.setTabAutoTitle(tabId, "Workspace Setup");
 	}
 
+	if (initialCommands.length === 0) {
+		try {
+			await ensureTerminalAttached({
+				paneId,
+				tabId,
+				workspaceId: options.data.workspace.id,
+				createOrAttach: options.createOrAttach,
+			});
+		} catch (error) {
+			console.error(
+				"[bootstrapOpenWorktree] Failed to create or attach:",
+				error,
+			);
+			return "create_or_attach_failed";
+		}
+		return null;
+	}
+
 	try {
-		await ensureTerminalAttached({
+		await launchCommandsInPane({
 			paneId,
 			tabId,
 			workspaceId: options.data.workspace.id,
+			commands: initialCommands,
 			createOrAttach: options.createOrAttach,
-		});
-	} catch (error) {
-		console.error("[bootstrapOpenWorktree] Failed to create or attach:", error);
-		return "create_or_attach_failed";
-	}
-
-	if (!setupCommand) {
-		return null;
-	}
-
-	try {
-		await writeCommandInPane({
-			paneId,
-			command: setupCommand,
-			write: options.writeToTerminal,
+			writeCommands: options.writeCommandsToTerminal,
 		});
 		return null;
 	} catch (error) {
+		// Distinguish attach vs write failures when possible.
+		const message = error instanceof Error ? error.message : String(error);
+		if (
+			message.includes("create") ||
+			message.includes("attach") ||
+			message.includes("not found")
+		) {
+			console.error(
+				"[bootstrapOpenWorktree] Failed to create or attach:",
+				error,
+			);
+			return "create_or_attach_failed";
+		}
 		console.error(
 			"[bootstrapOpenWorktree] Failed to write initial commands:",
 			error,

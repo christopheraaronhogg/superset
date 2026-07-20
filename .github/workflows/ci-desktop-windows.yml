@@ -1,0 +1,26 @@
+name: CI Desktop Windows
+
+on:
+  pull_request:
+    branches:
+      - windows-1.15
+      - grok/windows-stable-1-15-1
+    paths:
+      - "apps/desktop/**"
+      - "packages/pty-daemon/**"
+      - "packages/host-service/**"
+      - "packages/shared/**"
+      - "packages/cli/**"
+      - ".github/workflows/build-desktop-windows.yml"
+      - ".github/workflows/ci-desktop-windows.yml"
+      - ".github/workflows/release-desktop-windows.yml"
+  workflow_dispatch:
+
+jobs:
+  windows:
+    uses: ./.github/workflows/build-desktop-windows.yml
+    with:
+      channel: stable
+      artifact_prefix: desktop-windows-ci
+      artifact_retention_days: 7
+      run_smoke: true

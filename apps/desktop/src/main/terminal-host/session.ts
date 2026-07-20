@@ -11,6 +11,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import type { Socket } from "node:net";
 import * as path from "node:path";
+import { buildShellCommandChain } from "@superset/shared/shell";
 import {
 	createScanState,
 	SHELLS_WITH_READY_MARKER,
@@ -114,6 +115,7 @@ export interface SessionOptions {
 	workspacePath?: string;
 	rootPath?: string;
 	command?: string;
+	commands?: string[];
 	scrollbackLines?: number;
 	spawnProcess?: SpawnProcess;
 }
@@ -195,7 +197,14 @@ export class Session {
 		this.paneId = options.paneId;
 		this.tabId = options.tabId;
 		this.shell = options.shell || this.getDefaultShell();
-		this.command = options.command;
+		this.command =
+			options.command ??
+			(options.commands?.length
+				? buildShellCommandChain(options.commands, {
+						shell: this.shell,
+						platform: process.platform,
+					})
+				: undefined);
 		this.createdAt = new Date();
 		this.lastAttachedAt = new Date();
 		this.spawnProcess = options.spawnProcess ?? spawn;
@@ -1194,5 +1203,6 @@ export function createSession(request: CreateOrAttachRequest): Session {
 		workspacePath: request.workspacePath,
 		rootPath: request.rootPath,
 		command: request.command,
+		commands: request.commands,
 	});
 }

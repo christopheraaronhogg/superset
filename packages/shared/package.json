@@ -132,6 +132,10 @@
 			"types": "./src/simple-git-options.ts",
 			"default": "./src/simple-git-options.ts"
 		},
+		"./shell": {
+			"types": "./src/shell.ts",
+			"default": "./src/shell.ts"
+		},
 		"./shell-ready-scanner": {
 			"types": "./src/shell-ready-scanner.ts",
 			"default": "./src/shell-ready-scanner.ts"

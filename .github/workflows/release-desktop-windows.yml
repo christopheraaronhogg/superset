@@ -1,0 +1,147 @@
+name: Release Desktop Windows
+
+on:
+  push:
+    tags:
+      - "windows-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing windows-v* tag to release from (optional; defaults to ref)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-desktop-windows.yml
+    with:
+      channel: stable
+      electron_builder_config: electron-builder.ts
+      artifact_prefix: desktop-windows
+      artifact_retention_days: 30
+      run_smoke: true
+
+  release:
+    name: Create GitHub Release (Windows)
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/windows-v') || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Resolve tag name
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Releasing tag: ${TAG}"
+
+      - name: Download artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: release-artifacts
+          pattern: desktop-windows-*
+          merge-multiple: true
+
+      - name: Normalize update manifest filename
+        run: |
+          cd release-artifacts
+          ls -la
+          # Prefer latest.yml; if only versioned/channel yml exists, copy to latest.yml
+          if [ ! -f latest.yml ]; then
+            for file in *.yml; do
+              if [ -f "$file" ]; then
+                cp "$file" latest.yml
+                echo "Created latest.yml from $file"
+                break
+              fi
+            done
+          fi
+          test -f latest.yml || {
+            echo "::error::No Windows update manifest found among artifacts"
+            exit 1
+          }
+          test -f SHA256SUMS.txt || {
+            echo "::warning::SHA256SUMS.txt missing from artifacts; generating"
+            : > SHA256SUMS.txt
+            for f in *.exe latest.yml *.blockmap; do
+              [ -f "$f" ] || continue
+              sha256sum "$f" >> SHA256SUMS.txt
+            done
+          }
+          ls -la
+
+      - name: Create non-prerelease GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          NOTES=$(cat <<'EOF'
+          ## Unofficial Windows x64 build
+
+          This is an **unofficial** fork build of Superset Desktop for Windows 10/11 x64.
+
+          - Not affiliated with or endorsed by Superset, Inc.
+          - **Installer is unsigned** unless a Windows code-signing certificate is configured in CI. Windows SmartScreen may warn on first launch.
+          - Uses production cloud defaults (`api.superset.sh`, `app.superset.sh`, `streams.superset.sh`, `relay.superset.sh`, `docs.superset.sh`).
+          - License: Elastic License 2.0 (ELv2). See `LICENSE.md`.
+
+          Assets include the NSIS installer, `latest.yml` update manifest, optional blockmap, and `SHA256SUMS.txt`.
+
+          Auto-update feed (durable): this workflow also refreshes the rolling
+          `windows-latest` release that packaged Windows builds poll. Versioned
+          `windows-v*` tags stay off GitHub's global `/releases/latest` pointer
+          so macOS/Linux desktop feeds are unaffected.
+          EOF
+          )
+          # Versioned windows-v* release: historical download + provenance.
+          # Keep --latest=false so this lane never steals GitHub's global latest
+          # from upstream desktop-v* (macOS/Linux) releases.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-artifacts/* --clobber
+            gh release edit "$TAG" --notes "$NOTES" --prerelease=false --draft=false --latest=false
+          else
+            gh release create "$TAG" \
+              release-artifacts/* \
+              --title "Superset Desktop Windows ${TAG#windows-v}" \
+              --notes "$NOTES" \
+              --latest=false
+          fi
+
+          # Rolling durable auto-update endpoint used by packaged Windows builds
+          # (apps/desktop/src/main/lib/auto-update-feed.ts → WINDOWS_STABLE_UPDATE_TAG).
+          # Mirrors the desktop-canary pattern: delete + recreate so assets and
+          # target commit always match the just-published windows-v* build.
+          ROLLING_TAG="windows-latest"
+          ROLLING_NOTES=$(cat <<EOF
+          ## Windows stable auto-update feed
+
+          Rolling release for electron-updater. Packaged Windows builds fetch:
+
+          \`https://github.com/${{ github.repository }}/releases/download/${ROLLING_TAG}/latest.yml\`
+
+          Source version tag: \`${TAG}\`
+          Commit: \`${{ github.sha }}\`
+
+          Prefer the versioned \`${TAG}\` release for manual downloads / checksums.
+          EOF
+          )
+          gh release delete "$ROLLING_TAG" --yes --cleanup-tag || true
+          git push origin ":refs/tags/${ROLLING_TAG}" || true
+          gh release create "$ROLLING_TAG" \
+            release-artifacts/* \
+            --title "Superset Desktop Windows (latest)" \
+            --notes "$ROLLING_NOTES" \
+            --target "${{ github.sha }}" \
+            --latest=false
