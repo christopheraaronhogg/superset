@@ -546,4 +546,65 @@ describe("resolveWorkspaceRunDefinition Windows script invocation", () => {
 		expect(definition?.commands[0]).toContain(tsPath);
 		expect(definition?.commands[0]).not.toContain(cmdPath);
 	});
+
+	it("threads platform into script discovery instead of relying on the host OS", () => {
+		// Only a Windows-native run.cmd exists. On a macOS CI host, process.platform
+		// would never find it — the router path must force platform into resolveScript.
+		const root = join(sandbox.repoPath, "My Project");
+		const dir = join(root, ".superset");
+		mkdirSync(dir, { recursive: true });
+		const cmdPath = join(dir, "run.cmd");
+		writeFileSync(cmdPath, "@echo off\r\n", "utf-8");
+
+		expect(
+			resolveWorkspaceRunDefinition({
+				repoPath: root,
+				projectId: PROJECT_ID,
+				platform: "darwin",
+				shell: "/bin/zsh",
+			}),
+		).toBeNull();
+
+		const winDef = resolveWorkspaceRunDefinition({
+			repoPath: root,
+			projectId: PROJECT_ID,
+			platform: "win32",
+			shell: "cmd.exe",
+		});
+		expect(winDef).toEqual({
+			source: "project-config",
+			projectId: PROJECT_ID,
+			commands: [`"${cmdPath}" && exit /b 0 || exit /b 1`],
+		});
+	});
+
+	it("threads shell into Windows quoting (cmd.exe vs PowerShell 5.1)", () => {
+		const root = join(sandbox.repoPath, "My Project");
+		const dir = join(root, ".superset");
+		mkdirSync(dir, { recursive: true });
+		const scriptPath = join(dir, "run.sh");
+		writeFileSync(scriptPath, "#!/usr/bin/env bash\n", "utf-8");
+
+		const cmdDef = resolveWorkspaceRunDefinition({
+			repoPath: root,
+			projectId: PROJECT_ID,
+			platform: "win32",
+			shell: "cmd.exe",
+		});
+		const psDef = resolveWorkspaceRunDefinition({
+			repoPath: root,
+			projectId: PROJECT_ID,
+			platform: "win32",
+			shell: "powershell.exe",
+		});
+
+		expect(cmdDef?.commands[0]).toBe(
+			`bash "${scriptPath}" && exit /b 0 || exit /b 1`,
+		);
+		expect(psDef?.commands[0]).toBe(
+			`bash '${scriptPath}'; if (-not $?) { exit 1 }`,
+		);
+		// Same host process.platform; only the shell arg changes quoting.
+		expect(cmdDef?.commands[0]).not.toEqual(psDef?.commands[0]);
+	});
 });

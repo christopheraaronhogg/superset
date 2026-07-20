@@ -187,9 +187,12 @@ export const configRouter = router({
 		.input(projectIdInput)
 		.query(({ ctx, input }) => {
 			const project = requireProject(ctx, input.projectId);
+			// Explicit platform + launch shell (same source as setup/teardown) so
+			// discovered run.* scripts are never forced through POSIX bash quotes.
 			return resolveWorkspaceRunDefinition({
 				repoPath: project.repoPath,
 				projectId: project.id,
+				platform: process.platform,
 				shell: resolveRunShell(),
 			});
 		}),
