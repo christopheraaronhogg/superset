@@ -101,13 +101,15 @@ jobs:
           EOF
           )
           # Normal non-prerelease release (not draft) for windows-v* tags.
+          # Mark as GitHub "latest" so electron-updater feed
+          # `/releases/latest/download/latest.yml` resolves on this Windows-only fork.
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" release-artifacts/* --clobber
-            gh release edit "$TAG" --notes "$NOTES" --prerelease=false --draft=false
+            gh release edit "$TAG" --notes "$NOTES" --prerelease=false --draft=false --latest=true
           else
             gh release create "$TAG" \
               release-artifacts/* \
               --title "Superset Desktop Windows ${TAG#windows-v}" \
               --notes "$NOTES" \
-              --latest=false
+              --latest=true
           fi

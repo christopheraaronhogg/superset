@@ -63,9 +63,10 @@ const GITHUB_REPO_SLUG = resolveGithubRepoSlug();
 
 // Use explicit feed URLs to ensure we always fetch platform-specific manifests
 // (for example latest-mac.yml, latest-linux.yml, and latest.yml) from the correct release.
-// - Stable: fetches from /releases/latest/download/ (latest non-prerelease)
+// - Stable: fetches from /releases/latest/download/ (GitHub "latest" non-prerelease)
 // - Canary: fetches from /releases/download/desktop-canary/ (rolling canary tag)
-// - Windows fork lane: releases/download/windows-v*/ via fork latest.yml
+// - Fork Windows builds inject GITHUB_REPOSITORY so this points at the fork feed;
+//   windows-v* releases must be marked as GitHub "latest" for this path to resolve.
 const UPDATE_FEED_URL = IS_PRERELEASE
 	? `https://github.com/${GITHUB_REPO_SLUG}/releases/download/desktop-canary`
 	: `https://github.com/${GITHUB_REPO_SLUG}/releases/latest/download`;

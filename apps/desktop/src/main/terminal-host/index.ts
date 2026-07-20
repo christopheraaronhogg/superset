@@ -65,11 +65,7 @@ const SUPERSET_HOME_DIR = join(homedir(), SUPERSET_DIR_NAME);
 
 // Socket and token paths
 const SOCKET_PATH = getTerminalHostSocketPath({ homeDir: SUPERSET_HOME_DIR });
-
-function socketPathExists(): boolean {
-	if (isTerminalHostNamedPipe(SOCKET_PATH)) return true;
-	return existsSync(SOCKET_PATH);
-}
+const SOCKET_IS_NAMED_PIPE = isTerminalHostNamedPipe(SOCKET_PATH);
 
 const TOKEN_PATH = join(SUPERSET_HOME_DIR, "terminal-host.token");
 const PID_PATH = join(SUPERSET_HOME_DIR, "terminal-host.pid");
@@ -668,7 +664,8 @@ function handleConnection(socket: Socket) {
  */
 function isSocketLive(): Promise<boolean> {
 	return new Promise((resolve) => {
-		if (!socketPathExists()) {
+		// Named pipes are not filesystem paths; always probe connect.
+		if (!SOCKET_IS_NAMED_PIPE && !existsSync(SOCKET_PATH)) {
 			resolve(false);
 			return;
 		}
@@ -709,22 +706,22 @@ async function startServer(): Promise<void> {
 	}
 
 	// Check if socket is live before removing it
-	// This prevents orphaning a running daemon
-	if (socketPathExists()) {
+	// This prevents orphaning a running daemon. Named pipes always probe.
+	if (SOCKET_IS_NAMED_PIPE || existsSync(SOCKET_PATH)) {
 		const isLive = await isSocketLive();
 		if (isLive) {
 			log("error", "Another daemon is already running and responsive");
 			throw new Error("Another daemon is already running");
 		}
 
-		// Socket exists but not responsive - safe to remove
-		try {
-			if (!isTerminalHostNamedPipe(SOCKET_PATH)) {
+		// Unix socket exists but not responsive - safe to remove
+		if (!SOCKET_IS_NAMED_PIPE) {
+			try {
 				unlinkSync(SOCKET_PATH);
+				log("info", "Removed stale socket file");
+			} catch (error) {
+				throw new Error(`Failed to remove stale socket: ${error}`);
 			}
-			log("info", "Removed stale socket file");
-		} catch (error) {
-			throw new Error(`Failed to remove stale socket: ${error}`);
 		}
 	}
 
@@ -777,7 +774,7 @@ async function startServer(): Promise<void> {
 		newServer.listen(SOCKET_PATH, () => {
 			// Set socket permissions (readable/writable by owner only)
 			try {
-				if (!isTerminalHostNamedPipe(SOCKET_PATH)) {
+				if (!SOCKET_IS_NAMED_PIPE) {
 					chmodSync(SOCKET_PATH, 0o600);
 				}
 			} catch {
@@ -813,7 +810,7 @@ async function stopServer(): Promise<void> {
 	});
 
 	try {
-		if (socketPathExists() && !isTerminalHostNamedPipe(SOCKET_PATH)) {
+		if (!SOCKET_IS_NAMED_PIPE && existsSync(SOCKET_PATH)) {
 			unlinkSync(SOCKET_PATH);
 		}
 		if (existsSync(PID_PATH)) unlinkSync(PID_PATH);
