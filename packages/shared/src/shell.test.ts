@@ -75,6 +75,14 @@ describe("shell helpers", () => {
 				shell: "powershell.exe",
 			}),
 		).toBe("echo one; if ($?) { echo two }; if ($?) { echo three }");
+		// Shell identity must win even when the host process is not win32
+		// (unit tests, cross-compiled packaging, etc.).
+		expect(
+			buildShellCommandChain(["echo one", "echo two"], {
+				platform: "darwin",
+				shell: "powershell.exe",
+			}),
+		).toBe("echo one; if ($?) { echo two }");
 	});
 
 	test("builds exit-on-failure command chains for PowerShell setup commands", () => {

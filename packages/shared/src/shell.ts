@@ -103,14 +103,13 @@ export function buildShellCommandChain(
 	commands: string[],
 	options: BuildShellCommandChainOptions = {},
 ): string {
-	const platform = options.platform ?? process.platform;
 	const mode = options.mode ?? "interactive";
 	const knownShell = options.shell ? getKnownShell(options.shell) : "unknown";
 
-	if (
-		platform === "win32" &&
-		(knownShell === "powershell" || knownShell === "pwsh")
-	) {
+	// Shell identity wins over host platform: a PowerShell-selected session must
+	// never receive cmd/POSIX `&&` joins, even when unit tests or rare hosts run
+	// outside win32.
+	if (knownShell === "powershell" || knownShell === "pwsh") {
 		return mode === "exit-on-failure"
 			? buildPowerShellExitOnFailureChain(commands)
 			: buildPowerShellInteractiveChain(commands);

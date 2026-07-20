@@ -687,18 +687,32 @@ function resolveShellReady(
 	}
 }
 
+function resolveInitialTerminalCommand({
+	initialCommand,
+	initialCommands,
+	shell,
+}: {
+	initialCommand?: string;
+	initialCommands?: string[];
+	shell: string;
+}): string | undefined {
+	if (initialCommand) return initialCommand;
+	if (!initialCommands || initialCommands.length === 0) return undefined;
+	return buildShellCommandChain(initialCommands, {
+		shell,
+		platform: process.platform,
+	});
+}
+
 function queueInitialCommand(
 	session: TerminalSession,
 	initialCommand: string,
 ): void {
 	if (session.initialCommandQueued || session.exited) return;
 	session.initialCommandQueued = true;
-	const cmd = initialCommand.endsWith("\n")
-		? initialCommand
-		: `${initialCommand}\n`;
 	// Don't gate on OSC 133;A: PTY stdin buffers until the shell reads it,
 	// and gating turned broken/missing markers into a guaranteed stall.
-	session.pty.write(cmd);
+	session.pty.write(appendShellLineEnding(initialCommand, session.shell));
 }
 
 interface DaemonCloseResult {
@@ -955,6 +969,7 @@ interface CreateTerminalSessionOptions {
 	db: HostDb;
 	eventBus?: EventBus;
 	initialCommand?: string;
+	initialCommands?: string[];
 	cwd?: string;
 	/** Hidden sessions are process-internal and should not appear in user pickers. */
 	listed?: boolean;
@@ -1016,6 +1031,7 @@ export async function createTerminalSessionInternal({
 	db,
 	eventBus,
 	initialCommand,
+	initialCommands,
 	cwd: cwdOverride,
 	listed = true,
 	cols: requestedCols,
@@ -1034,7 +1050,14 @@ export async function createTerminalSessionInternal({
 		if (mismatchError) return { error: mismatchError };
 
 		if (listed) existing.listed = true;
-		if (initialCommand) queueInitialCommand(existing, initialCommand);
+		const existingInitialCommand = resolveInitialTerminalCommand({
+			initialCommand,
+			initialCommands,
+			shell: existing.shell,
+		});
+		if (existingInitialCommand) {
+			queueInitialCommand(existing, existingInitialCommand);
+		}
 		return existing;
 	}
 
@@ -1086,6 +1109,11 @@ export async function createTerminalSessionInternal({
 	const baseEnv = getTerminalBaseEnv();
 	const supersetHomeDir = process.env.SUPERSET_HOME_DIR || "";
 	const shell = resolveLaunchShell(baseEnv);
+	const resolvedInitialCommand = resolveInitialTerminalCommand({
+		initialCommand,
+		initialCommands,
+		shell,
+	});
 	const shellArgs = getShellLaunchArgs({ shell, supersetHomeDir });
 	const ptyEnv = buildV2TerminalEnv({
 		baseEnv,
@@ -1319,8 +1347,8 @@ export async function createTerminalSessionInternal({
 		},
 	);
 
-	if (initialCommand) {
-		queueInitialCommand(session, initialCommand);
+	if (resolvedInitialCommand) {
+		queueInitialCommand(session, resolvedInitialCommand);
 	}
 
 	return session;
@@ -1338,6 +1366,7 @@ export function registerWorkspaceTerminalRoute({
 			workspaceId: string;
 			themeType?: string;
 			initialCommand?: string;
+			initialCommands?: string[];
 			cwd?: string;
 			cols?: number;
 			rows?: number;
@@ -1354,6 +1383,7 @@ export function registerWorkspaceTerminalRoute({
 			db,
 			eventBus,
 			initialCommand: body.initialCommand,
+			initialCommands: body.initialCommands,
 			cwd: body.cwd,
 			cols: body.cols,
 			rows: body.rows,
